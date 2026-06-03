@@ -1,1 +1,17 @@
-[]
+- id: package-001
+  epic: package
+  status: pending
+  title: Rename package identity
+  description: User can install and refer to the extension under a clearer package
+    identity that reflects semantic session summaries and naming.
+  steps:
+  - Rename package from pi-tldr-lite to pi-session-summary or confirmed final name.
+  - Update package metadata, README, docs, package lock, state/source identifiers,
+    and command naming decision as needed.
+  - Preserve compatibility intentionally if keeping /tldr-lite or old state paths.
+  priority: 2
+  depends_on: []
+  discovered_from: null
+  plan_file: null
+  references: []
+  created_at: '2026-06-02'

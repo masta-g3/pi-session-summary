@@ -56,7 +56,7 @@ flowchart TD
   State --> Hub[Future Pi Agent Hub reader]
 ```
 
-### Current Scaffold
+### Current Structure
 
 ```text
 pi-tldr-lite/
@@ -68,9 +68,16 @@ pi-tldr-lite/
   docs/
     STRUCTURE.md               # living architecture and vision document
   src/
-    index.ts                   # Pi extension entrypoint scaffold
+    index.ts                   # Pi lifecycle wiring and /tldr-lite command
+    activity.ts                # compact bounded activity buffer
+    summarizer.ts              # throttled model-call scheduler and prompt builder
+    models.ts                  # tldrLite.model setting and auth/model resolution
+    naming.ts                  # minimal AI session naming helpers
+    state-output.ts            # atomic structured state writer
+    text.ts                    # sanitization, truncation, JSON parsing helpers
+    widget.ts                  # width-safe TLDR widget rendering
   test/
-    smoke.test.ts              # verifies extension export shape
+    *.test.ts                  # unit tests for runtime modules
   .gitignore
   LICENSE
   README.md
@@ -79,17 +86,18 @@ pi-tldr-lite/
   tsconfig.test.json
 ```
 
-### Planned Runtime Modules
+### Runtime Modules
 
 ```text
 src/
-  index.ts          # Pi lifecycle wiring and /tldr-lite command
+  index.ts          # thin Pi adapter; event collection, commands, lifecycle cleanup
   activity.ts       # compact bounded activity buffer
-  summarizer.ts     # throttled model-call scheduler and prompt builder
-  models.ts         # tldrLite.model setting and auth/model resolution
-  state-output.ts   # atomic structured state writer
-  text.ts           # sanitization, truncation, JSON parsing helpers
-  widget.ts         # width-safe TLDR widget rendering
+  summarizer.ts     # one-in-flight LLM scheduler and semantic prompt builder
+  models.ts         # model preference parsing and auth/model resolution
+  naming.ts         # first-prompt/history extraction and session-name generation
+  state-output.ts   # Agent Hub state path and atomic latest-only JSON writes
+  text.ts           # sanitization, truncation, model JSON parsing helpers
+  widget.ts         # width-safe TLDR widget and no-model warning rendering
 ```
 
 ### Data Flow
@@ -102,6 +110,7 @@ src/
 6. Text helpers sanitize and validate the response.
 7. The widget updates in the Pi session.
 8. If Agent Hub env vars exist, latest-only JSON is atomically written for the session.
+9. If the session is unnamed, the first user prompt can also generate a short session name with the same model path.
 
 ## Data Models
 
@@ -119,6 +128,17 @@ interface TldrActivity {
 ```
 
 Activity facts are model input only. They must stay bounded and must never be written to structured output.
+
+### Session Name
+
+Session naming is intentionally smaller than `pi-session-auto-rename`:
+
+- auto-name unnamed sessions from the first user prompt
+- `/tldr-lite name` manually renames from conversation history
+- reuse the TLDR model/auth resolution
+- no separate model picker, config file, or naming preferences
+
+Generated names are sanitized to one 2–6 word-ish title line and capped at 80 characters.
 
 ### Summary Output
 
@@ -139,11 +159,12 @@ type TldrPhase =
 interface TldrSummary {
   summary: string;
   phase: TldrPhase;
+  nextAction?: string;
   confidence?: number;
 }
 ```
 
-The summary should describe current workflow state, not mechanics. Avoid phrases like “running bash” unless the command itself is the user-visible task.
+The summary should describe current workflow state, not mechanics. Avoid phrases like “running bash” unless the command itself is the user-visible task. `nextAction` is only exported for waiting, reviewing, blocked, or complete states so active sessions do not show noisy “keep working” guidance.
 
 ### Agent Hub State File
 
@@ -164,6 +185,7 @@ interface TldrLiteStateFile {
   state: "starting" | "running" | "waiting" | "complete" | "blocked" | "disabled" | "no_model" | "error" | "shutdown";
   summary?: string;
   phase?: TldrPhase;
+  nextAction?: string;
   confidence?: number;
   model?: string;
   sequence: number;
@@ -245,7 +267,10 @@ Agent Hub should remain the consumer, not the TLDR generator. Future work can re
 
 - TLDR summary in selected-session details
 - optional phase badge or row suffix
+- `nextAction` in details only when present
 - stale summaries as absent after a threshold
+
+Agent Hub remains the source of truth for liveness/status (`running`, `waiting`, `stopped`, `error`). `pi-tldr-lite` should not duplicate those signals with `needsAttention`, `waitingOn`, or separate status lights. The Pi/Hub session title is the durable mission/deliverable; do not add a separate `deliverable` field unless the title contract changes.
 
 This preserves a clean boundary:
 

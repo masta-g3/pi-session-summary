@@ -1,14 +1,335 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { createActivityBuffer } from "./activity.js";
+import { formatModelPreference, getTldrModelAuth, resolveInitialModelPreference, type TldrModelPreference } from "./models.js";
+import { generateSessionName, getConversationTranscript, getFirstUserMessageText, type SessionEntry } from "./naming.js";
+import { createDefaultTimerScheduler, TldrSummarizer } from "./summarizer.js";
+import { tldrStatePath, writeTldrState, type TldrLiteStateFile } from "./state-output.js";
+import { compactUnknown, sanitizeText } from "./text.js";
+import { clearNoModelWarning, clearTldrWidget, notifyUser, showNoModelWarning, showTldrWidget } from "./widget.js";
 
 const EXTENSION_KEY = Symbol.for("pi-tldr-lite.extension.loaded");
 type TldrLiteGlobal = typeof globalThis & { [EXTENSION_KEY]?: true };
+
+type MessageEndEvent = { stopReason?: string; message?: unknown };
+type MessageUpdateEvent = { message?: unknown; assistantMessageEvent?: { type?: string; delta?: unknown } };
+type ToolEvent = { name?: string; toolName?: string; args?: unknown; input?: unknown; result?: unknown; error?: unknown };
+
+interface RuntimeState {
+  sessionActive: boolean;
+  enabled: boolean;
+  configuredModel: TldrModelPreference | undefined;
+  activity: ReturnType<typeof createActivityBuffer>;
+  summarizer: TldrSummarizer | undefined;
+  outputPath: string | undefined;
+  sequence: number;
+  latestSummary: string | undefined;
+  activeModel: string | undefined;
+  namingAttempted: boolean;
+  namingInProgress: boolean;
+  latestName: string | undefined;
+  writeChain: Promise<void>;
+}
 
 export default function tldrLite(pi: ExtensionAPI) {
   const globalState = globalThis as TldrLiteGlobal;
   if (globalState[EXTENSION_KEY]) return;
   globalState[EXTENSION_KEY] = true;
 
-  pi.on("session_shutdown", () => {
+  const state: RuntimeState = {
+    sessionActive: false,
+    enabled: true,
+    activity: createActivityBuffer(),
+    summarizer: undefined,
+    outputPath: tldrStatePath(process.env),
+    sequence: 0,
+    configuredModel: undefined,
+    latestSummary: undefined,
+    activeModel: undefined,
+    namingAttempted: false,
+    namingInProgress: false,
+    latestName: undefined,
+    writeChain: Promise.resolve(),
+  };
+
+  registerCommand(pi, state);
+
+  pi.on("session_start", (_event, ctx) => {
+    state.sessionActive = true;
+    state.enabled = true;
+    state.outputPath = tldrStatePath(process.env);
+    state.configuredModel = resolveInitialModelPreference(ctx.cwd);
+    state.activity.reset();
+    clearTldrWidget(ctx);
+    clearNoModelWarning(ctx);
+    state.summarizer = createSummarizer(ctx, state);
+    state.namingAttempted = false;
+    state.namingInProgress = false;
+    state.latestName = undefined;
+    void publishState(ctx, state, { state: "starting" });
+  });
+
+  pi.on("before_agent_start", (event, ctx) => {
+    if (!state.sessionActive || !state.enabled) return;
+    state.activity.reset();
+    state.summarizer?.reset();
+    const prompt = (event as { prompt?: unknown }).prompt;
+    state.activity.record("user", prompt);
+    clearTldrWidget(ctx);
+    state.summarizer?.schedule("initial", "running");
+    void attemptAutoName(pi, ctx, state, compactUnknown(prompt, 1_500));
+  });
+
+  pi.on("message_update", (event, _ctx) => {
+    if (!state.sessionActive || !state.enabled) return;
+    const text = assistantUpdateText(event as MessageUpdateEvent);
+    if (state.activity.recordAssistantUpdate(text)) state.summarizer?.schedule("normal", "running");
+  });
+
+  pi.on("tool_execution_start", (event, _ctx) => {
+    if (!state.sessionActive || !state.enabled) return;
+    state.activity.record("tool", compactToolEvent(event as ToolEvent, "started"));
+    state.summarizer?.schedule("normal", "running");
+  });
+
+  pi.on("tool_execution_end", (event, _ctx) => {
+    if (!state.sessionActive || !state.enabled) return;
+    state.activity.record("result", compactToolEvent(event as ToolEvent, "finished"));
+    state.summarizer?.schedule("normal", "running");
+  });
+
+  pi.on("message_end", (event, _ctx) => {
+    if (!state.sessionActive || !state.enabled) return;
+    const messageEnd = event as MessageEndEvent;
+    if (!isAssistantMessage(messageEnd.message)) return;
+    const stopReason = messageEnd.stopReason ?? messageStopReason(messageEnd.message);
+    if (stopReason === "toolUse" || hasToolUse(messageEnd.message)) return;
+    const text = finalMessageText(messageEnd.message) ?? compactUnknown(messageEnd.message, 900);
+    if (text) state.activity.record(stopReason === "error" ? "error" : "final", text);
+    state.summarizer?.schedule("final", "complete");
+  });
+
+  pi.on("agent_end", (_event, _ctx) => {
+    if (!state.sessionActive || !state.enabled) return;
+    state.summarizer?.schedule("final", "waiting");
+  });
+
+  pi.on("session_shutdown", (_event, ctx) => {
+    state.sessionActive = false;
+    state.summarizer?.reset();
+    state.summarizer = undefined;
+    state.activity.reset();
+    clearTldrWidget(ctx);
+    clearNoModelWarning(ctx);
+    void publishState(ctx, state, { state: "shutdown" });
     delete globalState[EXTENSION_KEY];
   });
+}
+
+function registerCommand(pi: ExtensionAPI, state: RuntimeState): void {
+  pi.registerCommand("tldr-lite", {
+    description: "pi-tldr-lite status and controls",
+    handler: async (args, ctx) => {
+      const action = args.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+      if (!action || action === "help" || action === "status") {
+        await notifyStatus(ctx, state);
+        return;
+      }
+      if (action === "off") {
+        state.enabled = false;
+        state.latestSummary = undefined;
+        state.summarizer?.setEnabled(false);
+        clearTldrWidget(ctx);
+        clearNoModelWarning(ctx);
+        await publishState(ctx, state, { state: "disabled" });
+        notifyUser(ctx, "pi-tldr-lite disabled");
+        return;
+      }
+      if (action === "on") {
+        state.enabled = true;
+        state.summarizer ??= createSummarizer(ctx, state);
+        state.summarizer.setEnabled(true);
+        state.summarizer.schedule("forced", "running");
+        notifyUser(ctx, "pi-tldr-lite enabled");
+        return;
+      }
+      if (action === "refresh") {
+        state.summarizer?.schedule("forced", "running");
+        notifyUser(ctx, "pi-tldr-lite refresh scheduled");
+        return;
+      }
+      if (action === "name") {
+        await nameFromHistory(pi, ctx, state);
+        return;
+      }
+      notifyUser(ctx, "Use /tldr-lite [status|on|off|refresh|name]", "error");
+    },
+  });
+}
+
+function createSummarizer(ctx: ExtensionContext, state: RuntimeState): TldrSummarizer {
+  return new TldrSummarizer({
+    now: Date.now,
+    scheduler: createDefaultTimerScheduler(),
+    activity: state.activity,
+    getAuth: async () => {
+      const auth = await getTldrModelAuth(ctx, state.configuredModel);
+      state.activeModel = auth ? `${auth.model.provider}/${auth.model.id}` : undefined;
+      if (auth) clearNoModelWarning(ctx);
+      else showNoModelWarning(ctx);
+      return auth;
+    },
+    publish: (summary) => {
+      state.latestSummary = summary.summary;
+      state.activeModel = summary.model;
+      showTldrWidget(ctx, summary.summary);
+    },
+    publishState: (partial) => publishState(ctx, state, partial),
+  });
+}
+
+async function attemptAutoName(pi: ExtensionAPI, ctx: ExtensionContext, state: RuntimeState, prompt: string | undefined): Promise<void> {
+  if (state.namingAttempted || state.namingInProgress) return;
+  if (pi.getSessionName()) return;
+  const source = prompt ?? getFirstUserMessageText(ctx.sessionManager.getBranch() as SessionEntry[]);
+  if (!source) return;
+
+  state.namingAttempted = true;
+  await generateAndSetName(pi, ctx, state, source, "first-message", false);
+}
+
+async function nameFromHistory(pi: ExtensionAPI, ctx: ExtensionContext, state: RuntimeState): Promise<void> {
+  const transcript = getConversationTranscript(ctx.sessionManager.getBranch() as SessionEntry[]);
+  if (!transcript) {
+    notifyUser(ctx, "No user/assistant messages available to name this session.", "error");
+    return;
+  }
+  await generateAndSetName(pi, ctx, state, transcript, "history", true);
+}
+
+async function generateAndSetName(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  state: RuntimeState,
+  source: string,
+  mode: "first-message" | "history",
+  force: boolean,
+): Promise<void> {
+  if (state.namingInProgress) return;
+  if (!force && pi.getSessionName()) return;
+
+  state.namingInProgress = true;
+  try {
+    const auth = await getTldrModelAuth(ctx, state.configuredModel);
+    if (!auth) {
+      notifyUser(ctx, "No authenticated model available for session naming.", "error");
+      return;
+    }
+    const name = await generateSessionName(auth, source, mode);
+    if (!name) {
+      notifyUser(ctx, "Session naming produced no usable name.", "error");
+      return;
+    }
+    if (!force && pi.getSessionName()) return;
+    pi.setSessionName(name);
+    state.latestName = name;
+    notifyUser(ctx, `Session named: ${name}`);
+  } catch (error) {
+    notifyUser(ctx, `Session naming failed: ${sanitizeText(error instanceof Error ? error.message : String(error), 160)}`, "error");
+  } finally {
+    state.namingInProgress = false;
+  }
+}
+
+async function publishState(ctx: ExtensionContext, state: RuntimeState, partial: Partial<TldrLiteStateFile>): Promise<void> {
+  state.sequence += 1;
+  const now = Date.now();
+  const model = partial.model ?? state.activeModel;
+  const output: TldrLiteStateFile = {
+    version: 1,
+    source: "pi-tldr-lite",
+    cwd: ctx.cwd,
+    state: partial.state ?? "running",
+    sequence: state.sequence,
+    updatedAt: partial.updatedAt ?? now,
+    ...(process.env.PI_AGENT_HUB_SESSION_ID ? { sessionId: process.env.PI_AGENT_HUB_SESSION_ID } : {}),
+    ...(partial.summary ? { summary: partial.summary } : {}),
+    ...(partial.phase ? { phase: partial.phase } : {}),
+    ...(partial.nextAction ? { nextAction: partial.nextAction } : {}),
+    ...(partial.confidence !== undefined ? { confidence: partial.confidence } : {}),
+    ...(model ? { model } : {}),
+    ...(partial.generatedAt ? { generatedAt: partial.generatedAt } : {}),
+    ...(partial.error ? { error: partial.error } : {}),
+  };
+  state.writeChain = state.writeChain.then(
+    () => writeTldrState(output, state.outputPath).catch(() => {}),
+    () => writeTldrState(output, state.outputPath).catch(() => {}),
+  );
+  await state.writeChain;
+}
+
+async function notifyStatus(ctx: ExtensionContext, state: RuntimeState): Promise<void> {
+  notifyUser(ctx, [
+    "pi-tldr-lite",
+    `enabled: ${state.enabled ? "yes" : "no"}`,
+    `selected model: ${formatModelPreference(state.configuredModel)}`,
+    `active model: ${state.activeModel ?? "unknown"}`,
+    `latest summary: ${state.latestSummary ?? "none"}`,
+    `latest name: ${state.latestName ?? "none"}`,
+    `output path: ${state.outputPath ?? "none"}`,
+    "commands: /tldr-lite [status|on|off|refresh|name]",
+  ].join("\n"));
+}
+
+function assistantUpdateText(event: MessageUpdateEvent): unknown {
+  const accumulatedText = messageContentText(event.message);
+  if (accumulatedText) return accumulatedText;
+  return event.assistantMessageEvent?.type === "text_delta" ? event.assistantMessageEvent.delta : undefined;
+}
+
+function compactToolEvent(event: ToolEvent, status: string): string {
+  const name = event.name ?? event.toolName ?? "tool";
+  const detail = compactUnknown(event.error ?? event.result ?? event.args ?? event.input, 240);
+  return sanitizeText(`${name} ${status}${detail ? `: ${detail}` : ""}`, 320);
+}
+
+function isAssistantMessage(message: unknown): boolean {
+  return Boolean(message && typeof message === "object" && (message as Record<string, unknown>).role === "assistant");
+}
+
+function hasToolUse(message: unknown): boolean {
+  if (!message || typeof message !== "object") return false;
+  const record = message as Record<string, unknown>;
+  if (Array.isArray(record.toolCalls) && record.toolCalls.length > 0) return true;
+  if (Array.isArray(record.content)) return record.content.some((part) => {
+    if (!part || typeof part !== "object") return false;
+    const type = (part as Record<string, unknown>).type;
+    return type === "tool_use" || type === "toolCall";
+  });
+  return false;
+}
+
+function messageStopReason(message: unknown): string | undefined {
+  return message && typeof message === "object" && typeof (message as Record<string, unknown>).stopReason === "string"
+    ? (message as { stopReason: string }).stopReason
+    : undefined;
+}
+
+function finalMessageText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") return undefined;
+  const record = message as Record<string, unknown>;
+  if (typeof record.errorMessage === "string") return sanitizeText(record.errorMessage, 900);
+  return messageContentText(message);
+}
+
+function messageContentText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") return undefined;
+  const content = (message as Record<string, unknown>).content;
+  if (typeof content === "string") return sanitizeText(content, 900) || undefined;
+  if (!Array.isArray(content)) return undefined;
+  const text = content.flatMap((part) => {
+    if (!part || typeof part !== "object") return [];
+    const value = (part as Record<string, unknown>).text;
+    return typeof value === "string" ? [value] : [];
+  }).join("\n");
+  return sanitizeText(text, 900) || undefined;
 }
