@@ -8,11 +8,19 @@ test("parses provider/model strings", () => {
   assert.equal(parseModelSpec("bad"), undefined);
 });
 
-test("prefers tldrLite.model over compatibility tldr.model", () => {
+test("prefers sessionSummary.model over legacy model settings", () => {
   assert.equal(formatModelPreference(parseSettings({
-    tldrLite: { model: "openai-codex/gpt-5.4-mini" },
-    tldr: { model: "anthropic/claude-haiku-4-5" },
+    sessionSummary: { model: "openai-codex/gpt-5.4-mini" },
+    tldrLite: { model: "anthropic/claude-haiku-4-5" },
+    tldr: { model: "anthropic/claude-haiku-4-5-20251001" },
   })), "openai-codex/gpt-5.4-mini");
+});
+
+test("falls back to legacy tldrLite.model before tldr.model", () => {
+  assert.equal(formatModelPreference(parseSettings({
+    tldrLite: { model: "anthropic/claude-haiku-4-5" },
+    tldr: { model: "anthropic/claude-haiku-4-5-20251001" },
+  })), "anthropic/claude-haiku-4-5");
 });
 
 test("auto candidate order starts with Codex models", () => {

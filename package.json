@@ -1,13 +1,14 @@
 {
-  "name": "pi-tldr-lite",
+  "name": "pi-session-summary",
   "version": "0.1.0",
-  "description": "Lightweight semantic TLDR widget and state exporter for Pi.",
+  "description": "Semantic session summaries and naming for Pi coding-agent sessions.",
   "type": "module",
   "license": "MIT",
   "keywords": [
     "pi-package",
     "pi-extension",
-    "tldr",
+    "session-summary",
+    "session-naming",
     "llm",
     "coding-agent"
   ],

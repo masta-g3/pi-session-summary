@@ -1,7 +1,7 @@
 import { complete, type UserMessage } from "@earendil-works/pi-ai";
 import { activityLines, type ActivityBuffer } from "./activity.js";
 import { formatAuthModel, type TldrModelAuth } from "./models.js";
-import type { TldrLiteStateFile } from "./state-output.js";
+import type { SessionSummaryStateFile } from "./state-output.js";
 import { parseSummaryJson, sanitizeText, type ParsedSummary } from "./text.js";
 
 export type TldrModelCall = typeof complete;
@@ -25,7 +25,7 @@ export interface TldrSummarizerOptions {
   generate?: TldrModelCall;
   getAuth: () => Promise<TldrModelAuth | undefined>;
   publish: (summary: TldrSummaryUpdate) => void | Promise<void>;
-  publishState: (state: Partial<TldrLiteStateFile>) => void | Promise<void>;
+  publishState: (state: Partial<SessionSummaryStateFile>) => void | Promise<void>;
 }
 
 const INITIAL_DEBOUNCE_MS = 1_200;
@@ -33,7 +33,7 @@ const NORMAL_DEBOUNCE_MS = 2_000;
 const MIN_MODEL_INTERVAL_MS = 5_000;
 const FINAL_DEBOUNCE_MS = 500;
 const REQUEST_TIMEOUT_MS = 2_500;
-const MAX_TLDR_TOKENS = 180;
+const MAX_SUMMARY_TOKENS = 180;
 
 export function createDefaultTimerScheduler(): TimerScheduler {
   return {
@@ -53,7 +53,7 @@ export class TldrSummarizer {
   private readonly generate: TldrModelCall;
   private readonly getAuth: () => Promise<TldrModelAuth | undefined>;
   private readonly publish: (summary: TldrSummaryUpdate) => void | Promise<void>;
-  private readonly publishState: (state: Partial<TldrLiteStateFile>) => void | Promise<void>;
+  private readonly publishState: (state: Partial<SessionSummaryStateFile>) => void | Promise<void>;
   private runId = 0;
   private enabled = true;
   private pendingTimer?: unknown;
@@ -145,7 +145,7 @@ export class TldrSummarizer {
       }, {
         apiKey: auth.apiKey,
         ...(auth.headers ? { headers: auth.headers } : {}),
-        maxTokens: MAX_TLDR_TOKENS,
+        maxTokens: MAX_SUMMARY_TOKENS,
         maxRetries: 0,
         cacheRetention: "none",
         timeoutMs: REQUEST_TIMEOUT_MS,
@@ -196,12 +196,12 @@ export class TldrSummarizer {
       "Current user request and recent activity:",
       ...activityLines(this.activity.all()),
       "",
-      "Previous TLDR:",
+      "Previous summary:",
       this.latestSummary ?? "none",
       "",
       `Agent state: ${this.agentState}`,
       "",
-      "Write the dashboard TLDR now.",
+      "Write the dashboard summary now.",
     ];
     return { role: "user", content: [{ type: "text", text: lines.join("\n") }], timestamp: Date.now() };
   }
@@ -231,7 +231,7 @@ function shouldPublishNextAction(phase: string, agentState: AgentState, nextActi
   return agentState === "waiting" || agentState === "complete" || agentState === "blocked" || phase === "waiting" || phase === "complete" || phase === "blocked" || phase === "reviewing";
 }
 
-function phaseToState(phase: string, agentState: AgentState): TldrLiteStateFile["state"] {
+function phaseToState(phase: string, agentState: AgentState): SessionSummaryStateFile["state"] {
   if (phase === "blocked") return "blocked";
   if (phase === "complete") return "complete";
   if (agentState === "complete") return "complete";

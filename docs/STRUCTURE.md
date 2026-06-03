@@ -1,13 +1,13 @@
-# pi-tldr-lite Structure
+# pi-session-summary Structure
 
 ## Vision
 
-`pi-tldr-lite` provides semantic, glanceable status summaries for Pi coding-agent sessions.
+`pi-session-summary` provides semantic, glanceable status summaries for Pi coding-agent sessions.
 
-The project solves a supervision problem: when a user runs several Pi sessions or subagents, deterministic statuses like `running`, `waiting`, or terminal previews do not explain what each agent is actually doing. `pi-tldr-lite` will use a fast LLM to infer the agent's current workflow stage and produce a short status sentence such as:
+The project solves a supervision problem: when a user runs several Pi sessions or subagents, deterministic statuses like `running`, `waiting`, or terminal previews do not explain what each agent is actually doing. `pi-session-summary` will use a fast LLM to infer the agent's current workflow stage and produce a short status sentence such as:
 
 ```text
-Designing the lightweight TLDR architecture for Agent Hub integration.
+Designing the lightweight summary architecture for Agent Hub integration.
 Debugging model selection for the semantic summary extension.
 Waiting for user approval on the implementation plan.
 ```
@@ -23,7 +23,7 @@ Core experience:
 1. Install or load the Pi extension.
 2. Run a Pi session normally.
 3. The extension asynchronously summarizes recent agent activity with a configured fast model.
-4. The user sees a compact TLDR widget above the editor.
+4. The user sees a compact summary widget above the editor.
 5. When running under Pi Agent Hub, the extension writes latest-only structured state for future dashboard display.
 
 ## Tech Stack
@@ -46,20 +46,20 @@ The package is intentionally a standalone Pi extension, not a Pi Agent Hub-only 
 
 ```mermaid
 flowchart TD
-  Session[Pi session] --> Extension[pi-tldr-lite extension]
+  Session[Pi session] --> Extension[pi-session-summary extension]
   Extension --> Activity[Activity buffer]
   Activity --> Scheduler[One-in-flight summarizer]
-  Scheduler --> Model[Fast TLDR model]
+  Scheduler --> Model[Fast summary model]
   Model --> Publish[Sanitize and publish]
   Publish --> Widget[In-session widget]
-  Publish --> State[Latest TLDR JSON]
+  Publish --> State[Latest summary JSON]
   State --> Hub[Future Pi Agent Hub reader]
 ```
 
 ### Current Structure
 
 ```text
-pi-tldr-lite/
+pi-session-summary/
   agent-work/
     features.yaml              # backlog, initially []
     plans/                     # active implementation plans
@@ -68,14 +68,14 @@ pi-tldr-lite/
   docs/
     STRUCTURE.md               # living architecture and vision document
   src/
-    index.ts                   # Pi lifecycle wiring and /tldr-lite command
+    index.ts                   # Pi lifecycle wiring and /session-summary command
     activity.ts                # compact bounded activity buffer
     summarizer.ts              # throttled model-call scheduler and prompt builder
-    models.ts                  # tldrLite.model setting and auth/model resolution
+    models.ts                  # sessionSummary.model setting and auth/model resolution
     naming.ts                  # minimal AI session naming helpers
     state-output.ts            # atomic structured state writer
     text.ts                    # sanitization, truncation, JSON parsing helpers
-    widget.ts                  # width-safe TLDR widget rendering
+    widget.ts                  # width-safe summary widget rendering
   test/
     *.test.ts                  # unit tests for runtime modules
   .gitignore
@@ -97,8 +97,14 @@ src/
   naming.ts         # first-prompt/history extraction and session-name generation
   state-output.ts   # Agent Hub state path and atomic latest-only JSON writes
   text.ts           # sanitization, truncation, model JSON parsing helpers
-  widget.ts         # width-safe TLDR widget and no-model warning rendering
+  widget.ts         # width-safe summary widget and no-model warning rendering
 ```
+
+### Compatibility Aliases
+
+`/session-summary` is the primary command. `/tldr-lite` remains a legacy alias for the same status, enable/disable, refresh, and naming actions.
+
+`sessionSummary.model` is the primary model setting. Existing `tldrLite.model` and `tldr.model` settings are still read as fallbacks, in that order, so users do not need a config migration.
 
 ### Data Flow
 
@@ -134,8 +140,8 @@ Activity facts are model input only. They must stay bounded and must never be wr
 Session naming is intentionally smaller than `pi-session-auto-rename`:
 
 - auto-name unnamed sessions from the first user prompt
-- `/tldr-lite name` manually renames from conversation history
-- reuse the TLDR model/auth resolution
+- `/session-summary name` manually renames from conversation history
+- reuse the summary model/auth resolution
 - no separate model picker, config file, or naming preferences
 
 Generated names are sanitized to one 2–6 word-ish title line and capped at 80 characters.
@@ -171,15 +177,15 @@ The summary should describe current workflow state, not mechanics. Avoid phrases
 When `PI_AGENT_HUB_DIR` and `PI_AGENT_HUB_SESSION_ID` are set, the extension will write:
 
 ```text
-${PI_AGENT_HUB_DIR}/tldr/${PI_AGENT_HUB_SESSION_ID}.json
+${PI_AGENT_HUB_DIR}/session-summary/${PI_AGENT_HUB_SESSION_ID}.json
 ```
 
 Schema:
 
 ```ts
-interface TldrLiteStateFile {
+interface SessionSummaryStateFile {
   version: 1;
-  source: "pi-tldr-lite";
+  source: "pi-session-summary";
   sessionId?: string;
   cwd: string;
   state: "starting" | "running" | "waiting" | "complete" | "blocked" | "disabled" | "no_model" | "error" | "shutdown";
@@ -224,7 +230,7 @@ Model calls must be:
 - no-retry by default
 - abortable on shutdown or reset
 
-If no authenticated model is available, publish `no_model` state and show a small warning instead of fabricating a TLDR.
+If no authenticated model is available, publish `no_model` state and show a small warning instead of fabricating a summary.
 
 ### Atomic latest-only state
 
@@ -263,14 +269,14 @@ pi -e ./src/index.ts
 
 ## Future Pi Agent Hub Integration
 
-Agent Hub should remain the consumer, not the TLDR generator. Future work can read the state file during dashboard refresh and display:
+Agent Hub should remain the consumer, not the summary generator. Future work can read the state file during dashboard refresh and display:
 
-- TLDR summary in selected-session details
+- session summary in selected-session details
 - optional phase badge or row suffix
 - `nextAction` in details only when present
 - stale summaries as absent after a threshold
 
-Agent Hub remains the source of truth for liveness/status (`running`, `waiting`, `stopped`, `error`). `pi-tldr-lite` should not duplicate those signals with `needsAttention`, `waitingOn`, or separate status lights. The Pi/Hub session title is the durable mission/deliverable; do not add a separate `deliverable` field unless the title contract changes.
+Agent Hub remains the source of truth for liveness/status (`running`, `waiting`, `stopped`, `error`). `pi-session-summary` should not duplicate those signals with `needsAttention`, `waitingOn`, or separate status lights. The Pi/Hub session title is the durable mission/deliverable; do not add a separate `deliverable` field unless the title contract changes.
 
 This preserves a clean boundary:
 

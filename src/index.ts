@@ -3,12 +3,12 @@ import { createActivityBuffer } from "./activity.js";
 import { formatModelPreference, getTldrModelAuth, resolveInitialModelPreference, type TldrModelPreference } from "./models.js";
 import { generateSessionName, getConversationTranscript, getFirstUserMessageText, type SessionEntry } from "./naming.js";
 import { createDefaultTimerScheduler, TldrSummarizer } from "./summarizer.js";
-import { tldrStatePath, writeTldrState, type TldrLiteStateFile } from "./state-output.js";
+import { sessionSummaryStatePath, writeSessionSummaryState, type SessionSummaryStateFile } from "./state-output.js";
 import { compactUnknown, sanitizeText } from "./text.js";
-import { clearNoModelWarning, clearTldrWidget, notifyUser, showNoModelWarning, showTldrWidget } from "./widget.js";
+import { clearNoModelWarning, clearSessionSummaryWidget, notifyUser, showNoModelWarning, showSessionSummaryWidget } from "./widget.js";
 
-const EXTENSION_KEY = Symbol.for("pi-tldr-lite.extension.loaded");
-type TldrLiteGlobal = typeof globalThis & { [EXTENSION_KEY]?: true };
+const EXTENSION_KEY = Symbol.for("pi-session-summary.extension.loaded");
+type SessionSummaryGlobal = typeof globalThis & { [EXTENSION_KEY]?: true };
 
 type MessageEndEvent = { stopReason?: string; message?: unknown };
 type MessageUpdateEvent = { message?: unknown; assistantMessageEvent?: { type?: string; delta?: unknown } };
@@ -30,8 +30,8 @@ interface RuntimeState {
   writeChain: Promise<void>;
 }
 
-export default function tldrLite(pi: ExtensionAPI) {
-  const globalState = globalThis as TldrLiteGlobal;
+export default function sessionSummary(pi: ExtensionAPI) {
+  const globalState = globalThis as SessionSummaryGlobal;
   if (globalState[EXTENSION_KEY]) return;
   globalState[EXTENSION_KEY] = true;
 
@@ -40,7 +40,7 @@ export default function tldrLite(pi: ExtensionAPI) {
     enabled: true,
     activity: createActivityBuffer(),
     summarizer: undefined,
-    outputPath: tldrStatePath(process.env),
+    outputPath: sessionSummaryStatePath(process.env),
     sequence: 0,
     configuredModel: undefined,
     latestSummary: undefined,
@@ -56,10 +56,10 @@ export default function tldrLite(pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     state.sessionActive = true;
     state.enabled = true;
-    state.outputPath = tldrStatePath(process.env);
+    state.outputPath = sessionSummaryStatePath(process.env);
     state.configuredModel = resolveInitialModelPreference(ctx.cwd);
     state.activity.reset();
-    clearTldrWidget(ctx);
+    clearSessionSummaryWidget(ctx);
     clearNoModelWarning(ctx);
     state.summarizer = createSummarizer(ctx, state);
     state.namingAttempted = false;
@@ -74,7 +74,7 @@ export default function tldrLite(pi: ExtensionAPI) {
     state.summarizer?.reset();
     const prompt = (event as { prompt?: unknown }).prompt;
     state.activity.record("user", prompt);
-    clearTldrWidget(ctx);
+    clearSessionSummaryWidget(ctx);
     state.summarizer?.schedule("initial", "running");
     void attemptAutoName(pi, ctx, state, compactUnknown(prompt, 1_500));
   });
@@ -118,7 +118,7 @@ export default function tldrLite(pi: ExtensionAPI) {
     state.summarizer?.reset();
     state.summarizer = undefined;
     state.activity.reset();
-    clearTldrWidget(ctx);
+    clearSessionSummaryWidget(ctx);
     clearNoModelWarning(ctx);
     void publishState(ctx, state, { state: "shutdown" });
     delete globalState[EXTENSION_KEY];
@@ -126,43 +126,49 @@ export default function tldrLite(pi: ExtensionAPI) {
 }
 
 function registerCommand(pi: ExtensionAPI, state: RuntimeState): void {
+  const handler = async (args: string, ctx: ExtensionContext) => {
+    const action = args.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+    if (!action || action === "help" || action === "status") {
+      await notifyStatus(ctx, state);
+      return;
+    }
+    if (action === "off") {
+      state.enabled = false;
+      state.latestSummary = undefined;
+      state.summarizer?.setEnabled(false);
+      clearSessionSummaryWidget(ctx);
+      clearNoModelWarning(ctx);
+      await publishState(ctx, state, { state: "disabled" });
+      notifyUser(ctx, "pi-session-summary disabled");
+      return;
+    }
+    if (action === "on") {
+      state.enabled = true;
+      state.summarizer ??= createSummarizer(ctx, state);
+      state.summarizer.setEnabled(true);
+      state.summarizer.schedule("forced", "running");
+      notifyUser(ctx, "pi-session-summary enabled");
+      return;
+    }
+    if (action === "refresh") {
+      state.summarizer?.schedule("forced", "running");
+      notifyUser(ctx, "pi-session-summary refresh scheduled");
+      return;
+    }
+    if (action === "name") {
+      await nameFromHistory(pi, ctx, state);
+      return;
+    }
+    notifyUser(ctx, "Use /session-summary [status|on|off|refresh|name] (legacy: /tldr-lite)", "error");
+  };
+
+  pi.registerCommand("session-summary", {
+    description: "pi-session-summary status and controls",
+    handler,
+  });
   pi.registerCommand("tldr-lite", {
-    description: "pi-tldr-lite status and controls",
-    handler: async (args, ctx) => {
-      const action = args.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
-      if (!action || action === "help" || action === "status") {
-        await notifyStatus(ctx, state);
-        return;
-      }
-      if (action === "off") {
-        state.enabled = false;
-        state.latestSummary = undefined;
-        state.summarizer?.setEnabled(false);
-        clearTldrWidget(ctx);
-        clearNoModelWarning(ctx);
-        await publishState(ctx, state, { state: "disabled" });
-        notifyUser(ctx, "pi-tldr-lite disabled");
-        return;
-      }
-      if (action === "on") {
-        state.enabled = true;
-        state.summarizer ??= createSummarizer(ctx, state);
-        state.summarizer.setEnabled(true);
-        state.summarizer.schedule("forced", "running");
-        notifyUser(ctx, "pi-tldr-lite enabled");
-        return;
-      }
-      if (action === "refresh") {
-        state.summarizer?.schedule("forced", "running");
-        notifyUser(ctx, "pi-tldr-lite refresh scheduled");
-        return;
-      }
-      if (action === "name") {
-        await nameFromHistory(pi, ctx, state);
-        return;
-      }
-      notifyUser(ctx, "Use /tldr-lite [status|on|off|refresh|name]", "error");
-    },
+    description: "Legacy alias for /session-summary",
+    handler,
   });
 }
 
@@ -181,7 +187,7 @@ function createSummarizer(ctx: ExtensionContext, state: RuntimeState): TldrSumma
     publish: (summary) => {
       state.latestSummary = summary.summary;
       state.activeModel = summary.model;
-      showTldrWidget(ctx, summary.summary);
+      showSessionSummaryWidget(ctx, summary.summary);
     },
     publishState: (partial) => publishState(ctx, state, partial),
   });
@@ -240,13 +246,13 @@ async function generateAndSetName(
   }
 }
 
-async function publishState(ctx: ExtensionContext, state: RuntimeState, partial: Partial<TldrLiteStateFile>): Promise<void> {
+async function publishState(ctx: ExtensionContext, state: RuntimeState, partial: Partial<SessionSummaryStateFile>): Promise<void> {
   state.sequence += 1;
   const now = Date.now();
   const model = partial.model ?? state.activeModel;
-  const output: TldrLiteStateFile = {
+  const output: SessionSummaryStateFile = {
     version: 1,
-    source: "pi-tldr-lite",
+    source: "pi-session-summary",
     cwd: ctx.cwd,
     state: partial.state ?? "running",
     sequence: state.sequence,
@@ -261,22 +267,22 @@ async function publishState(ctx: ExtensionContext, state: RuntimeState, partial:
     ...(partial.error ? { error: partial.error } : {}),
   };
   state.writeChain = state.writeChain.then(
-    () => writeTldrState(output, state.outputPath).catch(() => {}),
-    () => writeTldrState(output, state.outputPath).catch(() => {}),
+    () => writeSessionSummaryState(output, state.outputPath).catch(() => {}),
+    () => writeSessionSummaryState(output, state.outputPath).catch(() => {}),
   );
   await state.writeChain;
 }
 
 async function notifyStatus(ctx: ExtensionContext, state: RuntimeState): Promise<void> {
   notifyUser(ctx, [
-    "pi-tldr-lite",
+    "pi-session-summary",
     `enabled: ${state.enabled ? "yes" : "no"}`,
     `selected model: ${formatModelPreference(state.configuredModel)}`,
     `active model: ${state.activeModel ?? "unknown"}`,
     `latest summary: ${state.latestSummary ?? "none"}`,
     `latest name: ${state.latestName ?? "none"}`,
     `output path: ${state.outputPath ?? "none"}`,
-    "commands: /tldr-lite [status|on|off|refresh|name]",
+    "commands: /session-summary [status|on|off|refresh|name] (legacy: /tldr-lite)",
   ].join("\n"));
 }
 

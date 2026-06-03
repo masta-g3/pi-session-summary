@@ -3,9 +3,9 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { TldrPhase } from "./text.js";
 
-export interface TldrLiteStateFile {
+export interface SessionSummaryStateFile {
   version: 1;
-  source: "pi-tldr-lite";
+  source: "pi-session-summary";
   sessionId?: string;
   cwd: string;
   state: "starting" | "running" | "waiting" | "complete" | "blocked" | "disabled" | "no_model" | "error" | "shutdown";
@@ -23,14 +23,14 @@ export interface TldrLiteStateFile {
 export const HUB_DIR_ENV = "PI_AGENT_HUB_DIR";
 export const HUB_SESSION_ID_ENV = "PI_AGENT_HUB_SESSION_ID";
 
-export function tldrStatePath(env: NodeJS.ProcessEnv = process.env): string | undefined {
+export function sessionSummaryStatePath(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const stateDir = env[HUB_DIR_ENV];
   const sessionId = env[HUB_SESSION_ID_ENV];
   if (!stateDir || !sessionId) return undefined;
-  return join(stateDir, "tldr", `${safeSessionId(sessionId)}.json`);
+  return join(stateDir, "session-summary", `${safeSessionId(sessionId)}.json`);
 }
 
-export async function writeTldrState(state: TldrLiteStateFile, path = tldrStatePath()): Promise<void> {
+export async function writeSessionSummaryState(state: SessionSummaryStateFile, path = sessionSummaryStatePath()): Promise<void> {
   if (!path) return;
   await mkdir(dirname(path), { recursive: true });
   const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`;

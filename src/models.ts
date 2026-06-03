@@ -43,7 +43,7 @@ export function resolveInitialModelPreference(cwd: string): TldrModelPreference 
 }
 
 export function parseSettings(settings: Record<string, unknown>): TldrModelPreference | undefined {
-  return parseSection(settings.tldrLite) ?? parseSection(settings.tldr);
+  return parseSection(settings.sessionSummary) ?? parseSection(settings.tldrLite) ?? parseSection(settings.tldr);
 }
 
 async function authFor(ctx: ExtensionContext, preference: TldrModelPreference): Promise<TldrModelAuth | undefined> {

@@ -3,10 +3,10 @@ import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { sanitizeText } from "./text.js";
 
-export const WIDGET_KEY = "pi-tldr-lite";
-export const WARNING_WIDGET_KEY = "pi-tldr-lite-warning";
-const TITLE = " tldr ";
-const WARNING = "no tldr-lite model authenticated";
+export const WIDGET_KEY = "pi-session-summary";
+export const WARNING_WIDGET_KEY = "pi-session-summary-warning";
+const TITLE = " summary ";
+const WARNING = "no session summary model authenticated";
 const MIN_BOX_WIDTH = 16;
 
 class WarningLine implements Component {
@@ -17,12 +17,12 @@ class WarningLine implements Component {
   }
 }
 
-export class TldrLiteBox implements Component {
+export class SessionSummaryBox implements Component {
   constructor(private readonly theme: Theme, private readonly summary: string) {}
   invalidate(): void {}
   render(width: number): string[] {
     const safeSummary = sanitizeText(this.summary, 220);
-    if (width < MIN_BOX_WIDTH) return [truncateToWidth(`tldr: ${safeSummary}`, width)];
+    if (width < MIN_BOX_WIDTH) return [truncateToWidth(`summary: ${safeSummary}`, width)];
 
     const contentWidth = Math.max(1, width - 4);
     const lines = wrapTextWithAnsi(safeSummary, contentWidth);
@@ -48,17 +48,17 @@ export class TldrLiteBox implements Component {
   }
 }
 
-export function showTldrWidget(ctx: ExtensionContext, summary: string): void {
+export function showSessionSummaryWidget(ctx: ExtensionContext, summary: string): void {
   if (!ctx.hasUI) return;
   const safeSummary = sanitizeText(summary, 220);
   if (!safeSummary) {
-    clearTldrWidget(ctx);
+    clearSessionSummaryWidget(ctx);
     return;
   }
-  ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => new TldrLiteBox(theme, safeSummary), { placement: "aboveEditor" });
+  ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => new SessionSummaryBox(theme, safeSummary), { placement: "aboveEditor" });
 }
 
-export function clearTldrWidget(ctx: ExtensionContext): void {
+export function clearSessionSummaryWidget(ctx: ExtensionContext): void {
   if (!ctx.hasUI) return;
   ctx.ui.setWidget(WIDGET_KEY, undefined);
 }

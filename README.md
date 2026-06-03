@@ -1,8 +1,8 @@
-# pi-tldr-lite
+# pi-session-summary
 
-Lightweight semantic TLDRs for Pi coding-agent sessions.
+Semantic session summaries and naming for Pi coding-agent sessions.
 
-`pi-tldr-lite` is a Pi extension package that uses a fast LLM to summarize what an agent is currently doing in workflow terms, then renders that status in-session and exports latest-only structured state for Pi Agent Hub.
+`pi-session-summary` is a Pi extension package that uses a fast LLM to summarize what an agent is currently doing in workflow terms, then renders that status in-session and exports latest-only structured state for Pi Agent Hub.
 
 ## Requirements
 
@@ -26,40 +26,44 @@ pi -e ./src/index.ts
 ## Commands
 
 ```text
-/tldr-lite status
-/tldr-lite on
-/tldr-lite off
-/tldr-lite refresh
-/tldr-lite name
+/session-summary status
+/session-summary on
+/session-summary off
+/session-summary refresh
+/session-summary name
 ```
+
+Compatibility: `/tldr-lite` remains a legacy alias for the same command actions.
 
 ## Configuration
 
 ```json
 {
-  "tldrLite": {
+  "sessionSummary": {
     "model": "openai-codex/gpt-5.4-mini"
   }
 }
 ```
 
-If `tldrLite.model` is absent, the extension can also read the compatibility setting `tldr.model`. If neither setting resolves to an authenticated model, it tries fast Codex-first defaults.
+If `sessionSummary.model` is absent, the extension can also read the compatibility settings `tldrLite.model` and `tldr.model`. If no setting resolves to an authenticated model, it tries fast Codex-first defaults.
 
-The same model is used for optional session naming. The extension auto-names unnamed sessions from the first user prompt, and `/tldr-lite name` refreshes the name from conversation history.
+The same model is used for optional session naming. The extension auto-names unnamed sessions from the first user prompt, and `/session-summary name` refreshes the name from conversation history. The legacy `/tldr-lite name` alias is still supported.
 
 ## Agent Hub output
 
 When running inside a Pi Agent Hub managed session, the extension writes latest-only state to:
 
 ```text
-${PI_AGENT_HUB_DIR}/tldr/${PI_AGENT_HUB_SESSION_ID}.json
+${PI_AGENT_HUB_DIR}/session-summary/${PI_AGENT_HUB_SESSION_ID}.json
 ```
+
+The state file uses `"source": "pi-session-summary"`.
 
 Only summary metadata is written: current summary, phase, optional next action for waiting, reviewing, blocked, or complete states, confidence, and model. Raw prompts, tool arguments, command output, and conversation snippets stay out of the state file.
 
 ## Privacy and performance
 
-Short recent activity snippets are sent to the configured TLDR model provider. Model calls are asynchronous, throttled, timeout-bound, no-retry, and never awaited by Pi event handlers.
+Short recent activity snippets are sent to the configured summary model provider. Model calls are asynchronous, throttled, timeout-bound, no-retry, and never awaited by Pi event handlers.
 
 ## Workflow
 
