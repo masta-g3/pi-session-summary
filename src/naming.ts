@@ -1,5 +1,5 @@
 import { complete, type UserMessage } from "@earendil-works/pi-ai";
-import type { TldrModelAuth } from "./models.js";
+import type { SummaryModelAuth } from "./models.js";
 import { sanitizeText } from "./text.js";
 
 export const MAX_SESSION_NAME_LENGTH = 80;
@@ -77,7 +77,7 @@ export function buildNamePrompt(source: string, mode: "first-message" | "history
   };
 }
 
-export async function generateSessionName(auth: TldrModelAuth, source: string, mode: "first-message" | "history" = "first-message"): Promise<string | undefined> {
+export async function generateSessionName(auth: SummaryModelAuth, source: string, mode: "first-message" | "history" = "first-message"): Promise<string | undefined> {
   const response = await complete(auth.model, {
     systemPrompt: NAMING_SYSTEM_PROMPT,
     messages: [buildNamePrompt(source, mode)],

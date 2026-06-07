@@ -1,10 +1,10 @@
 import { complete, type UserMessage } from "@earendil-works/pi-ai";
 import { activityLines, type ActivityBuffer } from "./activity.js";
-import { formatAuthModel, type TldrModelAuth } from "./models.js";
+import { formatAuthModel, type SummaryModelAuth } from "./models.js";
 import type { SessionSummaryStateFile } from "./state-output.js";
 import { parseSummaryJson, sanitizeText, type ParsedSummary } from "./text.js";
 
-export type TldrModelCall = typeof complete;
+export type SummaryModelCall = typeof complete;
 export type AgentState = "running" | "waiting" | "complete" | "blocked";
 
 export interface TimerScheduler {
@@ -12,19 +12,19 @@ export interface TimerScheduler {
   clearTimeout(handle: unknown): void;
 }
 
-export interface TldrSummaryUpdate extends ParsedSummary {
+export interface SummaryUpdate extends ParsedSummary {
   model: string;
   generatedAt: number;
   sequence: number;
 }
 
-export interface TldrSummarizerOptions {
+export interface SessionSummarySummarizerOptions {
   now: () => number;
   scheduler: TimerScheduler;
   activity: ActivityBuffer;
-  generate?: TldrModelCall;
-  getAuth: () => Promise<TldrModelAuth | undefined>;
-  publish: (summary: TldrSummaryUpdate) => void | Promise<void>;
+  generate?: SummaryModelCall;
+  getAuth: () => Promise<SummaryModelAuth | undefined>;
+  publish: (summary: SummaryUpdate) => void | Promise<void>;
   publishState: (state: Partial<SessionSummaryStateFile>) => void | Promise<void>;
 }
 
@@ -46,13 +46,13 @@ export function createDefaultTimerScheduler(): TimerScheduler {
   };
 }
 
-export class TldrSummarizer {
+export class SessionSummarySummarizer {
   private readonly now: () => number;
   private readonly scheduler: TimerScheduler;
   private readonly activity: ActivityBuffer;
-  private readonly generate: TldrModelCall;
-  private readonly getAuth: () => Promise<TldrModelAuth | undefined>;
-  private readonly publish: (summary: TldrSummaryUpdate) => void | Promise<void>;
+  private readonly generate: SummaryModelCall;
+  private readonly getAuth: () => Promise<SummaryModelAuth | undefined>;
+  private readonly publish: (summary: SummaryUpdate) => void | Promise<void>;
   private readonly publishState: (state: Partial<SessionSummaryStateFile>) => void | Promise<void>;
   private runId = 0;
   private enabled = true;
@@ -64,7 +64,7 @@ export class TldrSummarizer {
   private abortController: AbortController | undefined;
   private agentState: AgentState = "waiting";
 
-  constructor(options: TldrSummarizerOptions) {
+  constructor(options: SessionSummarySummarizerOptions) {
     this.now = options.now;
     this.scheduler = options.scheduler;
     this.activity = options.activity;
@@ -163,7 +163,7 @@ export class TldrSummarizer {
         model: formatAuthModel(auth),
         generatedAt: this.now(),
         sequence: this.activity.latestSequence(),
-      } satisfies TldrSummaryUpdate;
+      } satisfies SummaryUpdate;
       this.latestSummary = update.summary;
       this.lastPublishedAt = update.generatedAt;
       await this.publish(update);
@@ -193,15 +193,15 @@ export class TldrSummarizer {
 
   private prompt(): UserMessage {
     const lines = [
-      "Current user request and recent activity:",
+      "Latest activity, newest last:",
       ...activityLines(this.activity.all()),
       "",
-      "Previous summary:",
+      "Previous summary, for context only:",
       this.latestSummary ?? "none",
       "",
       `Agent state: ${this.agentState}`,
       "",
-      "Write the dashboard summary now.",
+      "Summarize what is happening now, not what happened earlier.",
     ];
     return { role: "user", content: [{ type: "text", text: lines.join("\n") }], timestamp: Date.now() };
   }
@@ -218,13 +218,15 @@ export class TldrSummarizer {
 }
 
 export const SYSTEM_PROMPT = `You write concise status summaries for a dashboard that monitors many Pi coding-agent sessions.
-Summarize what the agent is doing in the user's task or workflow, not which tools it is using.
-Prefer business/domain/workflow language: planning, investigating, implementing, testing, reviewing, debugging, waiting, blocked, complete.
-Use tool and file details only as hidden clues unless they are essential to the user-visible task.
-Do not mention tool calls, terminal commands, model internals, or implementation mechanics.
-Write one current-status sentence under 140 characters.
+Focus on the latest user intent and what the agent is doing now.
+Prefer the active task over older workflow history.
+Use workflow language, not tool mechanics.
+Do not say the agent is changing code unless it is currently editing or planning edits.
+Do not mention commands, files, tools, model internals, or terminal output unless essential.
+Write one present-tense sentence under 120 characters.
+Choose one phase: starting, planning, investigating, implementing, testing, debugging, reviewing, waiting, complete, blocked, unknown.
 Return JSON only with keys: summary, phase, nextAction, confidence.
-Set nextAction only when the agent is waiting, blocked, reviewing, or complete; otherwise use an empty string.`;
+Set nextAction only for waiting, blocked, reviewing, or complete; otherwise use an empty string.`;
 
 function shouldPublishNextAction(phase: string, agentState: AgentState, nextAction: string | undefined): nextAction is string {
   if (!nextAction) return false;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { FAST_MODEL_CANDIDATES, formatModelPreference, getTldrModelAuth, parseModelSpec, parseSettings } from "../src/models.js";
+import { FAST_MODEL_CANDIDATES, formatModelPreference, getSummaryModelAuth, parseModelSpec, parseSettings } from "../src/models.js";
 
 test("parses provider/model strings", () => {
   assert.deepEqual(parseModelSpec("openai-codex/gpt-5.4-mini"), { provider: "openai-codex", id: "gpt-5.4-mini" });
@@ -8,19 +8,17 @@ test("parses provider/model strings", () => {
   assert.equal(parseModelSpec("bad"), undefined);
 });
 
-test("prefers sessionSummary.model over legacy model settings", () => {
+test("reads only sessionSummary.model", () => {
   assert.equal(formatModelPreference(parseSettings({
     sessionSummary: { model: "openai-codex/gpt-5.4-mini" },
-    tldrLite: { model: "anthropic/claude-haiku-4-5" },
-    tldr: { model: "anthropic/claude-haiku-4-5-20251001" },
   })), "openai-codex/gpt-5.4-mini");
 });
 
-test("falls back to legacy tldrLite.model before tldr.model", () => {
-  assert.equal(formatModelPreference(parseSettings({
-    tldrLite: { model: "anthropic/claude-haiku-4-5" },
-    tldr: { model: "anthropic/claude-haiku-4-5-20251001" },
-  })), "anthropic/claude-haiku-4-5");
+test("ignores unrelated model settings", () => {
+  assert.equal(parseSettings({
+    otherSummary: { model: "anthropic/claude-haiku-4-5" },
+    dashboard: { model: "anthropic/claude-haiku-4-5-20251001" },
+  }), undefined);
 });
 
 test("auto candidate order starts with Codex models", () => {
@@ -45,6 +43,6 @@ test("falls back from missing configured auth to auto candidate", async () => {
       },
     },
   };
-  const auth = await getTldrModelAuth(ctx as never, { provider: "missing", id: "model" });
+  const auth = await getSummaryModelAuth(ctx as never, { provider: "missing", id: "model" });
   assert.equal(auth?.model.provider, "openai-codex");
 });

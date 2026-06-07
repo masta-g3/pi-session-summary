@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createActivityBuffer } from "../src/activity.js";
-import { TldrSummarizer, type TimerScheduler } from "../src/summarizer.js";
+import { SessionSummarySummarizer, type TimerScheduler } from "../src/summarizer.js";
 
 class FakeScheduler implements TimerScheduler {
   timers: { callback: () => void; delayMs: number; active: boolean }[] = [];
@@ -28,13 +28,13 @@ function auth() {
 test("uses initial debounce before first model call", () => {
   const scheduler = new FakeScheduler();
   const activity = createActivityBuffer();
-  activity.record("user", "Build TLDRs");
-  const summarizer = new TldrSummarizer({
+  activity.record("user", "Build session summaries");
+  const summarizer = new SessionSummarySummarizer({
     now: () => 0,
     scheduler,
     activity,
     getAuth: async () => auth() as never,
-    generate: (async () => ({ stopReason: "stop", content: [{ type: "text", text: '{"summary":"Planning semantic TLDRs.","phase":"planning","confidence":0.9}' }] })) as never,
+    generate: (async () => ({ stopReason: "stop", content: [{ type: "text", text: '{"summary":"Planning semantic summaries.","phase":"planning","confidence":0.9}' }] })) as never,
     publish: () => {},
     publishState: () => {},
   });
@@ -47,20 +47,20 @@ test("publishes parsed model JSON", async () => {
   const activity = createActivityBuffer();
   const published: unknown[] = [];
   const states: unknown[] = [];
-  activity.record("user", "Build TLDRs");
-  const summarizer = new TldrSummarizer({
+  activity.record("user", "Build session summaries");
+  const summarizer = new SessionSummarySummarizer({
     now: () => 10,
     scheduler,
     activity,
     getAuth: async () => auth() as never,
-    generate: (async () => ({ stopReason: "stop", content: [{ type: "text", text: '{"summary":"Planning semantic TLDRs.","phase":"planning","confidence":0.9}' }] })) as never,
+    generate: (async () => ({ stopReason: "stop", content: [{ type: "text", text: '{"summary":"Planning semantic summaries.","phase":"planning","confidence":0.9}' }] })) as never,
     publish: (summary) => { published.push(summary); },
     publishState: (state) => { states.push(state); },
   });
   summarizer.schedule("forced", "running");
   scheduler.runNext();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal((published[0] as { summary: string }).summary, "Planning semantic TLDRs.");
+  assert.equal((published[0] as { summary: string }).summary, "Planning semantic summaries.");
   assert.equal((states[0] as { state: string }).state, "running");
 });
 
@@ -68,12 +68,12 @@ test("omits nextAction while actively running", async () => {
   const scheduler = new FakeScheduler();
   const activity = createActivityBuffer();
   const states: unknown[] = [];
-  const summarizer = new TldrSummarizer({
+  const summarizer = new SessionSummarySummarizer({
     now: () => 10,
     scheduler,
     activity,
     getAuth: async () => auth() as never,
-    generate: (async () => ({ stopReason: "stop", content: [{ type: "text", text: '{"summary":"Implementing semantic TLDRs.","phase":"implementing","nextAction":"Keep implementing the extension."}' }] })) as never,
+    generate: (async () => ({ stopReason: "stop", content: [{ type: "text", text: '{"summary":"Implementing semantic summaries.","phase":"implementing","nextAction":"Keep implementing the extension."}' }] })) as never,
     publish: () => {},
     publishState: (state) => { states.push(state); },
   });
@@ -87,12 +87,12 @@ test("publishes nextAction when waiting or complete", async () => {
   const scheduler = new FakeScheduler();
   const activity = createActivityBuffer();
   const states: unknown[] = [];
-  const summarizer = new TldrSummarizer({
+  const summarizer = new SessionSummarySummarizer({
     now: () => 10,
     scheduler,
     activity,
     getAuth: async () => auth() as never,
-    generate: (async () => ({ stopReason: "stop", content: [{ type: "text", text: '{"summary":"Completed TLDR validation.","phase":"complete","nextAction":"Run review before reflection."}' }] })) as never,
+    generate: (async () => ({ stopReason: "stop", content: [{ type: "text", text: '{"summary":"Completed session-summary validation.","phase":"complete","nextAction":"Run review before reflection."}' }] })) as never,
     publish: () => {},
     publishState: (state) => { states.push(state); },
   });
@@ -107,7 +107,7 @@ test("publishes no_model state without fake summary", async () => {
   const activity = createActivityBuffer();
   const published: unknown[] = [];
   const states: unknown[] = [];
-  const summarizer = new TldrSummarizer({
+  const summarizer = new SessionSummarySummarizer({
     now: () => 0,
     scheduler,
     activity,
@@ -127,7 +127,7 @@ test("marks dirty in-flight activity for one follow-up", async () => {
   const scheduler = new FakeScheduler();
   const activity = createActivityBuffer();
   let resolveGenerate: ((value: unknown) => void) | undefined;
-  const summarizer = new TldrSummarizer({
+  const summarizer = new SessionSummarySummarizer({
     now: () => 0,
     scheduler,
     activity,

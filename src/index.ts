@@ -1,8 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createActivityBuffer } from "./activity.js";
-import { formatModelPreference, getTldrModelAuth, resolveInitialModelPreference, type TldrModelPreference } from "./models.js";
+import { formatModelPreference, getSummaryModelAuth, resolveInitialModelPreference, type SummaryModelPreference } from "./models.js";
 import { generateSessionName, getConversationTranscript, getFirstUserMessageText, type SessionEntry } from "./naming.js";
-import { createDefaultTimerScheduler, TldrSummarizer } from "./summarizer.js";
+import { createDefaultTimerScheduler, SessionSummarySummarizer } from "./summarizer.js";
 import { sessionSummaryStatePath, writeSessionSummaryState, type SessionSummaryStateFile } from "./state-output.js";
 import { compactUnknown, sanitizeText } from "./text.js";
 import { clearNoModelWarning, clearSessionSummaryWidget, notifyUser, showNoModelWarning, showSessionSummaryWidget } from "./widget.js";
@@ -17,9 +17,9 @@ type ToolEvent = { name?: string; toolName?: string; args?: unknown; input?: unk
 interface RuntimeState {
   sessionActive: boolean;
   enabled: boolean;
-  configuredModel: TldrModelPreference | undefined;
+  configuredModel: SummaryModelPreference | undefined;
   activity: ReturnType<typeof createActivityBuffer>;
-  summarizer: TldrSummarizer | undefined;
+  summarizer: SessionSummarySummarizer | undefined;
   outputPath: string | undefined;
   sequence: number;
   latestSummary: string | undefined;
@@ -159,26 +159,22 @@ function registerCommand(pi: ExtensionAPI, state: RuntimeState): void {
       await nameFromHistory(pi, ctx, state);
       return;
     }
-    notifyUser(ctx, "Use /session-summary [status|on|off|refresh|name] (legacy: /tldr-lite)", "error");
+    notifyUser(ctx, "Use /session-summary [status|on|off|refresh|name]", "error");
   };
 
   pi.registerCommand("session-summary", {
     description: "pi-session-summary status and controls",
     handler,
   });
-  pi.registerCommand("tldr-lite", {
-    description: "Legacy alias for /session-summary",
-    handler,
-  });
 }
 
-function createSummarizer(ctx: ExtensionContext, state: RuntimeState): TldrSummarizer {
-  return new TldrSummarizer({
+function createSummarizer(ctx: ExtensionContext, state: RuntimeState): SessionSummarySummarizer {
+  return new SessionSummarySummarizer({
     now: Date.now,
     scheduler: createDefaultTimerScheduler(),
     activity: state.activity,
     getAuth: async () => {
-      const auth = await getTldrModelAuth(ctx, state.configuredModel);
+      const auth = await getSummaryModelAuth(ctx, state.configuredModel);
       state.activeModel = auth ? `${auth.model.provider}/${auth.model.id}` : undefined;
       if (auth) clearNoModelWarning(ctx);
       else showNoModelWarning(ctx);
@@ -225,7 +221,7 @@ async function generateAndSetName(
 
   state.namingInProgress = true;
   try {
-    const auth = await getTldrModelAuth(ctx, state.configuredModel);
+    const auth = await getSummaryModelAuth(ctx, state.configuredModel);
     if (!auth) {
       notifyUser(ctx, "No authenticated model available for session naming.", "error");
       return;
@@ -282,7 +278,7 @@ async function notifyStatus(ctx: ExtensionContext, state: RuntimeState): Promise
     `latest summary: ${state.latestSummary ?? "none"}`,
     `latest name: ${state.latestName ?? "none"}`,
     `output path: ${state.outputPath ?? "none"}`,
-    "commands: /session-summary [status|on|off|refresh|name] (legacy: /tldr-lite)",
+    "commands: /session-summary [status|on|off|refresh|name]",
   ].join("\n"));
 }
 

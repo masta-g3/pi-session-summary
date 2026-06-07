@@ -2,7 +2,7 @@ import { compactUnknown, sanitizeText } from "./text.js";
 
 export type ActivityKind = "user" | "assistant" | "tool" | "result" | "final" | "error";
 
-export interface TldrActivity {
+export interface ActivityFact {
   sequence: number;
   kind: ActivityKind;
   text: string;
@@ -10,9 +10,9 @@ export interface TldrActivity {
 }
 
 export interface ActivityBuffer {
-  record(kind: ActivityKind, text: unknown, at?: number): TldrActivity | undefined;
-  recordAssistantUpdate(text: unknown, at?: number): TldrActivity | undefined;
-  all(): TldrActivity[];
+  record(kind: ActivityKind, text: unknown, at?: number): ActivityFact | undefined;
+  recordAssistantUpdate(text: unknown, at?: number): ActivityFact | undefined;
+  all(): ActivityFact[];
   reset(): void;
   latestSequence(): number;
 }
@@ -24,14 +24,14 @@ const ASSISTANT_UPDATE_MIN_INTERVAL_MS = 1_000;
 
 export function createActivityBuffer(limit = DEFAULT_LIMIT, maxFactChars = DEFAULT_FACT_CHARS, now: () => number = Date.now): ActivityBuffer {
   let sequence = 0;
-  let activities: TldrActivity[] = [];
+  let activities: ActivityFact[] = [];
   let lastAssistantUpdate = "";
   let lastAssistantUpdateAt = Number.NEGATIVE_INFINITY;
 
-  function push(kind: ActivityKind, raw: unknown, at = now()): TldrActivity | undefined {
+  function push(kind: ActivityKind, raw: unknown, at = now()): ActivityFact | undefined {
     const text = compactUnknown(raw, maxFactChars);
     if (!text) return undefined;
-    const activity = { sequence: ++sequence, kind, text, at } satisfies TldrActivity;
+    const activity = { sequence: ++sequence, kind, text, at } satisfies ActivityFact;
     activities.push(activity);
     if (activities.length > limit) activities = activities.slice(-limit);
     return activity;
@@ -63,6 +63,6 @@ export function createActivityBuffer(limit = DEFAULT_LIMIT, maxFactChars = DEFAU
   };
 }
 
-export function activityLines(activities: readonly TldrActivity[]): string[] {
+export function activityLines(activities: readonly ActivityFact[]): string[] {
   return activities.map((activity) => `- ${activity.kind}: ${activity.text}`);
 }

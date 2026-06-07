@@ -1,11 +1,11 @@
 export interface ParsedSummary {
   summary: string;
-  phase: TldrPhase;
+  phase: SummaryPhase;
   nextAction?: string;
   confidence?: number;
 }
 
-export type TldrPhase =
+export type SummaryPhase =
   | "starting"
   | "planning"
   | "investigating"
@@ -18,7 +18,7 @@ export type TldrPhase =
   | "blocked"
   | "unknown";
 
-export const TLDR_PHASES = new Set<TldrPhase>([
+export const SUMMARY_PHASES = new Set<SummaryPhase>([
   "starting",
   "planning",
   "investigating",
@@ -75,7 +75,7 @@ export function parseSummaryJson(text: string): ParsedSummary | undefined {
   const summary = typeof record.summary === "string" ? sanitizeText(record.summary, 180) : "";
   if (!summary) return undefined;
 
-  const phase = typeof record.phase === "string" && TLDR_PHASES.has(record.phase as TldrPhase) ? record.phase as TldrPhase : "unknown";
+  const phase = typeof record.phase === "string" && SUMMARY_PHASES.has(record.phase as SummaryPhase) ? record.phase as SummaryPhase : "unknown";
   const nextAction = typeof record.nextAction === "string" ? sanitizeText(record.nextAction, 180) : "";
   const confidence = typeof record.confidence === "number" && Number.isFinite(record.confidence)
     ? Math.max(0, Math.min(1, record.confidence))

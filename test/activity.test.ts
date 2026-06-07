@@ -4,8 +4,8 @@ import { activityLines, createActivityBuffer } from "../src/activity.js";
 
 test("records a user request", () => {
   const buffer = createActivityBuffer(12, 700, () => 10);
-  const activity = buffer.record("user", "Build the TLDR extension");
-  assert.deepEqual(activity, { sequence: 1, kind: "user", text: "Build the TLDR extension", at: 10 });
+  const activity = buffer.record("user", "Build the session summary extension");
+  assert.deepEqual(activity, { sequence: 1, kind: "user", text: "Build the session summary extension", at: 10 });
 });
 
 test("throttles tiny assistant updates", () => {
@@ -33,6 +33,6 @@ test("resets retained activity without resetting sequence", () => {
 
 test("formats activity lines for prompts", () => {
   const buffer = createActivityBuffer();
-  buffer.record("user", "Plan semantic TLDRs");
-  assert.deepEqual(activityLines(buffer.all()), ["- user: Plan semantic TLDRs"]);
+  buffer.record("user", "Plan semantic summaries");
+  assert.deepEqual(activityLines(buffer.all()), ["- user: Plan semantic summaries"]);
 });

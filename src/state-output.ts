@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { TldrPhase } from "./text.js";
+import type { SummaryPhase } from "./text.js";
 
 export interface SessionSummaryStateFile {
   version: 1;
@@ -10,7 +10,7 @@ export interface SessionSummaryStateFile {
   cwd: string;
   state: "starting" | "running" | "waiting" | "complete" | "blocked" | "disabled" | "no_model" | "error" | "shutdown";
   summary?: string;
-  phase?: TldrPhase;
+  phase?: SummaryPhase;
   nextAction?: string;
   confidence?: number;
   model?: string;

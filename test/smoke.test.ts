@@ -6,7 +6,7 @@ test("exports a Pi extension factory", () => {
   assert.equal(typeof sessionSummary, "function");
 });
 
-test("registers primary command and legacy alias", () => {
+test("registers only the session-summary command", () => {
   const commands = new Map<string, { description: string; handler: unknown }>();
   const events: string[] = [];
   sessionSummary({
@@ -19,7 +19,6 @@ test("registers primary command and legacy alias", () => {
   } as never);
 
   assert.equal(typeof commands.get("session-summary")?.handler, "function");
-  assert.equal(commands.get("tldr-lite")?.handler, commands.get("session-summary")?.handler);
-  assert.match(commands.get("tldr-lite")?.description ?? "", /legacy/i);
+  assert.deepEqual([...commands.keys()], ["session-summary"]);
   assert.ok(events.includes("session_start"));
 });

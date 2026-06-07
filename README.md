@@ -4,6 +4,19 @@ Semantic session summaries and naming for Pi coding-agent sessions.
 
 `pi-session-summary` is a Pi extension package that uses a fast LLM to summarize what an agent is currently doing in workflow terms, then renders that status in-session and exports latest-only structured state for Pi Agent Hub.
 
+## Main elements
+
+The extension produces four semantic elements:
+
+| Element | Purpose |
+| --- | --- |
+| Session name | Short title generated from the first prompt or conversation history. |
+| Summary | One-sentence description of what the agent is doing now. |
+| Stage label | Workflow phase such as `planning`, `implementing`, `testing`, `waiting`, or `blocked`. |
+| Next action | Optional guidance only when the session is waiting, blocked, reviewing, or complete. |
+
+Internally, the extension captures bounded activity facts such as user prompts, assistant text, tool starts/results, final messages, and errors. Those activity facts are inputs for the model only; they are not the main product output and are not written to Agent Hub state.
+
 ## Requirements
 
 - Node.js `>=22.19.0`
@@ -33,8 +46,6 @@ pi -e ./src/index.ts
 /session-summary name
 ```
 
-Compatibility: `/tldr-lite` remains a legacy alias for the same command actions.
-
 ## Configuration
 
 ```json
@@ -45,9 +56,9 @@ Compatibility: `/tldr-lite` remains a legacy alias for the same command actions.
 }
 ```
 
-If `sessionSummary.model` is absent, the extension can also read the compatibility settings `tldrLite.model` and `tldr.model`. If no setting resolves to an authenticated model, it tries fast Codex-first defaults.
+If `sessionSummary.model` is absent or does not resolve to an authenticated model, the extension tries fast Codex-first defaults.
 
-The same model is used for optional session naming. The extension auto-names unnamed sessions from the first user prompt, and `/session-summary name` refreshes the name from conversation history. The legacy `/tldr-lite name` alias is still supported.
+The same model is used for optional session naming. The extension auto-names unnamed sessions from the first user prompt, and `/session-summary name` refreshes the name from conversation history.
 
 ## Agent Hub output
 
@@ -59,7 +70,7 @@ ${PI_AGENT_HUB_DIR}/session-summary/${PI_AGENT_HUB_SESSION_ID}.json
 
 The state file uses `"source": "pi-session-summary"`.
 
-Only summary metadata is written: current summary, phase, optional next action for waiting, reviewing, blocked, or complete states, confidence, and model. Raw prompts, tool arguments, command output, and conversation snippets stay out of the state file.
+Only generated metadata is written: current summary, stage label (`phase`), optional next action for waiting, reviewing, blocked, or complete states, confidence, and model. Raw prompts, tool arguments, command output, and conversation snippets stay out of the state file.
 
 ## Privacy and performance
 

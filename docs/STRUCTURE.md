@@ -16,7 +16,7 @@ Target users:
 
 - Pi users who supervise multiple coding-agent sessions.
 - Pi Agent Hub users who need dashboard-native semantic status.
-- Maintainers who want a smaller alternative to the fuller `pi-tldr` package.
+- Maintainers who want a focused, lightweight semantic status package.
 
 Core experience:
 
@@ -100,11 +100,11 @@ src/
   widget.ts         # width-safe summary widget and no-model warning rendering
 ```
 
-### Compatibility Aliases
+### Commands and Settings
 
-`/session-summary` is the primary command. `/tldr-lite` remains a legacy alias for the same status, enable/disable, refresh, and naming actions.
+`/session-summary` is the command for status, enable/disable, refresh, and naming actions.
 
-`sessionSummary.model` is the primary model setting. Existing `tldrLite.model` and `tldr.model` settings are still read as fallbacks, in that order, so users do not need a config migration.
+`sessionSummary.model` is the only model setting read by this package. If absent or unauthenticated, the extension tries fast Codex-first defaults.
 
 ### Data Flow
 
@@ -112,11 +112,24 @@ src/
 2. `index.ts` normalizes events into compact facts and stores them in the activity buffer.
 3. The summarizer schedules work with debounce/rate-limit guards.
 4. At most one model request is in flight.
-5. The model returns JSON with a short summary, phase, and confidence.
+5. The model returns JSON with a short summary, stage label (`phase`), optional next action, and confidence.
 6. Text helpers sanitize and validate the response.
 7. The widget updates in the Pi session.
 8. If Agent Hub env vars exist, latest-only JSON is atomically written for the session.
 9. If the session is unnamed, the first user prompt can also generate a short session name with the same model path.
+
+## Semantic Outputs vs Activity Inputs
+
+The product-level elements are:
+
+| Element | Runtime representation | Notes |
+| --- | --- | --- |
+| Name | Pi session name | Generated from the first prompt or `/session-summary name`; not written to the summary state file. |
+| Summary | `summary` | One current-status sentence for the widget and Agent Hub state. |
+| Stage label | `phase` | LLM-selected workflow stage such as `planning`, `implementing`, `testing`, `waiting`, or `blocked`. |
+| Next action | `nextAction` | Exported only for waiting, reviewing, blocked, or complete states. |
+
+Activity facts are different: they are compact internal inputs captured from Pi events (`user`, `assistant`, `tool`, `result`, `final`, `error`) so the model can infer the semantic outputs. Activity facts stay bounded in memory and must not be written to structured output.
 
 ## Data Models
 
@@ -125,7 +138,7 @@ src/
 ```ts
 type ActivityKind = "user" | "assistant" | "tool" | "result" | "final" | "error";
 
-interface TldrActivity {
+interface ActivityFact {
   sequence: number;
   kind: ActivityKind;
   text: string;
@@ -149,7 +162,7 @@ Generated names are sanitized to one 2–6 word-ish title line and capped at 80 
 ### Summary Output
 
 ```ts
-type TldrPhase =
+type SummaryPhase =
   | "starting"
   | "planning"
   | "investigating"
@@ -162,9 +175,9 @@ type TldrPhase =
   | "blocked"
   | "unknown";
 
-interface TldrSummary {
+interface SummaryOutput {
   summary: string;
-  phase: TldrPhase;
+  phase: SummaryPhase;
   nextAction?: string;
   confidence?: number;
 }
@@ -190,7 +203,7 @@ interface SessionSummaryStateFile {
   cwd: string;
   state: "starting" | "running" | "waiting" | "complete" | "blocked" | "disabled" | "no_model" | "error" | "shutdown";
   summary?: string;
-  phase?: TldrPhase;
+  phase?: SummaryPhase;
   nextAction?: string;
   confidence?: number;
   model?: string;
