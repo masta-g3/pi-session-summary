@@ -16,3 +16,14 @@
   references: []
   created_at: '2026-06-02'
   completed_at: '2026-06-03'
+- id: metadata-001
+  epic: metadata
+  status: done
+  title: Define dashboard session metadata schema
+  description: 'Split session summary output into dashboard-oriented v2 metadata:
+    goal, status, next step, and stage, with testing against captured Pi log sessions.'
+  priority: 1
+  depends_on: []
+  created_at: '2026-06-07'
+  completed_at: '2026-06-07'
+  plan_file: agent-work/history/20260607_metadata-001_dashboard_metadata.md

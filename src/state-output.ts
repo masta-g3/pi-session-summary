@@ -1,17 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { SummaryPhase } from "./text.js";
+import type { SummaryStage } from "./text.js";
 
 export interface SessionSummaryStateFile {
-  version: 1;
+  version: 2;
   source: "pi-session-summary";
   sessionId?: string;
   cwd: string;
   state: "starting" | "running" | "waiting" | "complete" | "blocked" | "disabled" | "no_model" | "error" | "shutdown";
-  summary?: string;
-  phase?: SummaryPhase;
-  nextAction?: string;
+  sessionName?: string;
+  goal?: string;
+  status?: string;
+  stage?: SummaryStage;
+  nextStep?: string;
   confidence?: number;
   model?: string;
   sequence: number;

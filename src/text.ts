@@ -1,11 +1,12 @@
-export interface ParsedSummary {
-  summary: string;
-  phase: SummaryPhase;
-  nextAction?: string;
+export interface ParsedSessionMetadata {
+  goal: string;
+  status: string;
+  stage: SummaryStage;
+  nextStep?: string;
   confidence?: number;
 }
 
-export type SummaryPhase =
+export type SummaryStage =
   | "starting"
   | "planning"
   | "investigating"
@@ -18,7 +19,7 @@ export type SummaryPhase =
   | "blocked"
   | "unknown";
 
-export const SUMMARY_PHASES = new Set<SummaryPhase>([
+export const SUMMARY_STAGES = new Set<SummaryStage>([
   "starting",
   "planning",
   "investigating",
@@ -34,6 +35,9 @@ export const SUMMARY_PHASES = new Set<SummaryPhase>([
 
 const CONTROL_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u009b]/g;
 const ANSI_PATTERN = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\)|[PX^_].*?\u001b\\|[@-Z\\-_])/g;
+const MAX_GOAL_CHARS = 100;
+const MAX_STATUS_CHARS = 110;
+const MAX_NEXT_STEP_CHARS = 120;
 
 export function sanitizeText(text: string, maxChars = 800): string {
   const stripped = text
@@ -58,7 +62,7 @@ export function compactUnknown(value: unknown, maxChars = 800): string | undefin
   }
 }
 
-export function parseSummaryJson(text: string): ParsedSummary | undefined {
+export function parseSessionMetadataJson(text: string): ParsedSessionMetadata | undefined {
   const clean = sanitizeText(text, 2_000);
   const jsonText = extractJsonObject(clean);
   if (!jsonText) return undefined;
@@ -72,16 +76,17 @@ export function parseSummaryJson(text: string): ParsedSummary | undefined {
 
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
   const record = parsed as Record<string, unknown>;
-  const summary = typeof record.summary === "string" ? sanitizeText(record.summary, 180) : "";
-  if (!summary) return undefined;
+  const goal = typeof record.goal === "string" ? sanitizeText(record.goal, MAX_GOAL_CHARS) : "";
+  const status = typeof record.status === "string" ? sanitizeText(record.status, MAX_STATUS_CHARS) : "";
+  if (!goal || !status) return undefined;
 
-  const phase = typeof record.phase === "string" && SUMMARY_PHASES.has(record.phase as SummaryPhase) ? record.phase as SummaryPhase : "unknown";
-  const nextAction = typeof record.nextAction === "string" ? sanitizeText(record.nextAction, 180) : "";
+  const stage = typeof record.stage === "string" && SUMMARY_STAGES.has(record.stage as SummaryStage) ? record.stage as SummaryStage : "unknown";
+  const nextStep = typeof record.nextStep === "string" ? sanitizeText(record.nextStep, MAX_NEXT_STEP_CHARS) : "";
   const confidence = typeof record.confidence === "number" && Number.isFinite(record.confidence)
     ? Math.max(0, Math.min(1, record.confidence))
     : undefined;
 
-  return { summary, phase, ...(nextAction ? { nextAction } : {}), ...(confidence !== undefined ? { confidence } : {}) };
+  return { goal, status, stage, ...(nextStep ? { nextStep } : {}), ...(confidence !== undefined ? { confidence } : {}) };
 }
 
 function extractJsonObject(text: string): string | undefined {

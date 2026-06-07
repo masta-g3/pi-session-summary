@@ -5,7 +5,7 @@ import { sanitizeText } from "./text.js";
 
 export const WIDGET_KEY = "pi-session-summary";
 export const WARNING_WIDGET_KEY = "pi-session-summary-warning";
-const TITLE = " summary ";
+const TITLE = " status ";
 const WARNING = "no session summary model authenticated";
 const MIN_BOX_WIDTH = 16;
 
@@ -18,14 +18,14 @@ class WarningLine implements Component {
 }
 
 export class SessionSummaryBox implements Component {
-  constructor(private readonly theme: Theme, private readonly summary: string) {}
+  constructor(private readonly theme: Theme, private readonly status: string) {}
   invalidate(): void {}
   render(width: number): string[] {
-    const safeSummary = sanitizeText(this.summary, 220);
-    if (width < MIN_BOX_WIDTH) return [truncateToWidth(`summary: ${safeSummary}`, width)];
+    const safeStatus = sanitizeText(this.status, 220);
+    if (width < MIN_BOX_WIDTH) return [truncateToWidth(`status: ${safeStatus}`, width)];
 
     const contentWidth = Math.max(1, width - 4);
-    const lines = wrapTextWithAnsi(safeSummary, contentWidth);
+    const lines = wrapTextWithAnsi(safeStatus, contentWidth);
     return [
       this.topBorder(width),
       ...(lines.length ? lines : [""]).map((line) => this.contentLine(line, contentWidth)),
@@ -48,14 +48,14 @@ export class SessionSummaryBox implements Component {
   }
 }
 
-export function showSessionSummaryWidget(ctx: ExtensionContext, summary: string): void {
+export function showSessionSummaryWidget(ctx: ExtensionContext, status: string): void {
   if (!ctx.hasUI) return;
-  const safeSummary = sanitizeText(summary, 220);
-  if (!safeSummary) {
+  const safeStatus = sanitizeText(status, 220);
+  if (!safeStatus) {
     clearSessionSummaryWidget(ctx);
     return;
   }
-  ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => new SessionSummaryBox(theme, safeSummary), { placement: "aboveEditor" });
+  ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => new SessionSummaryBox(theme, safeStatus), { placement: "aboveEditor" });
 }
 
 export function clearSessionSummaryWidget(ctx: ExtensionContext): void {

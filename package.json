@@ -1,7 +1,7 @@
 {
   "name": "pi-session-summary",
   "version": "0.1.0",
-  "description": "Semantic session summaries and naming for Pi coding-agent sessions.",
+  "description": "Semantic session metadata and naming for Pi coding-agent sessions.",
   "type": "module",
   "license": "MIT",
   "keywords": [

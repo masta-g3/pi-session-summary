@@ -13,20 +13,28 @@ test("returns undefined when Hub env vars are absent", () => {
   assert.equal(sessionSummaryStatePath({ PI_AGENT_HUB_DIR: "/tmp/hub" }), undefined);
 });
 
-test("creates parent directory and writes latest state JSON", async () => {
+test("creates parent directory and writes latest v2 state JSON", async () => {
   const dir = await mkdtemp(join(tmpdir(), "pi-session-summary-"));
   const path = join(dir, "missing", "session.json");
   await writeSessionSummaryState({
-    version: 1,
+    version: 2,
     source: "pi-session-summary",
     cwd: dir,
     state: "running",
-    summary: "Planning semantic status output.",
+    sessionName: "Metadata Schema",
+    goal: "Define dashboard metadata.",
+    status: "Planning semantic status output.",
+    stage: "planning",
+    nextStep: "Implement parser tests.",
     sequence: 1,
     updatedAt: 123,
   }, path);
-  const parsed = JSON.parse(await readFile(path, "utf8")) as { summary: string; source: string };
-  assert.equal(parsed.summary, "Planning semantic status output.");
+  const parsed = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+  assert.equal(parsed.version, 2);
+  assert.equal(parsed.status, "Planning semantic status output.");
   assert.equal(parsed.source, "pi-session-summary");
+  assert.equal("summary" in parsed, false);
+  assert.equal("phase" in parsed, false);
+  assert.equal("nextAction" in parsed, false);
   await rm(dir, { recursive: true, force: true });
 });

@@ -1,24 +1,93 @@
 import assert from "node:assert/strict";
+import { readFile, rm, mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import sessionSummary from "../src/index.js";
+
+const EXTENSION_KEY = Symbol.for("pi-session-summary.extension.loaded");
+
+function resetExtensionSingleton(): void {
+  delete (globalThis as { [key: symbol]: unknown })[EXTENSION_KEY];
+}
+
+async function readJsonWhenReady(path: string): Promise<Record<string, unknown>> {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try {
+      return JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    } catch (error) {
+      if ((error as { code?: string }).code !== "ENOENT") throw error;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+  return JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+}
 
 test("exports a Pi extension factory", () => {
   assert.equal(typeof sessionSummary, "function");
 });
 
 test("registers only the session-summary command", () => {
+  resetExtensionSingleton();
   const commands = new Map<string, { description: string; handler: unknown }>();
-  const events: string[] = [];
+  const events = new Map<string, (event: unknown, ctx: unknown) => void>();
   sessionSummary({
     registerCommand(name: string, command: { description: string; handler: unknown }) {
       commands.set(name, command);
     },
-    on(name: string) {
-      events.push(name);
+    on(name: string, handler: (event: unknown, ctx: unknown) => void) {
+      events.set(name, handler);
+    },
+    getSessionName() {
+      return undefined;
     },
   } as never);
 
   assert.equal(typeof commands.get("session-summary")?.handler, "function");
   assert.deepEqual([...commands.keys()], ["session-summary"]);
-  assert.ok(events.includes("session_start"));
+  assert.ok(events.has("session_start"));
+
+  events.get("session_shutdown")?.({}, { cwd: process.cwd(), hasUI: false } as never);
+});
+
+test("writes starting v2 state with mirrored session name", async () => {
+  resetExtensionSingleton();
+  const dir = await mkdtemp(join(tmpdir(), "pi-session-summary-smoke-"));
+  const previousHubDir = process.env.PI_AGENT_HUB_DIR;
+  const previousSessionId = process.env.PI_AGENT_HUB_SESSION_ID;
+  process.env.PI_AGENT_HUB_DIR = dir;
+  process.env.PI_AGENT_HUB_SESSION_ID = "runtime-v2";
+
+  const events = new Map<string, (event: unknown, ctx: unknown) => void>();
+  const ctx = { cwd: process.cwd(), hasUI: false };
+  try {
+    sessionSummary({
+      registerCommand() {},
+      on(name: string, handler: (event: unknown, ctx: unknown) => void) {
+        events.set(name, handler);
+      },
+      getSessionName() {
+        return "Metadata Dashboard";
+      },
+    } as never);
+
+    events.get("session_start")?.({}, ctx as never);
+    const statePath = join(dir, "session-summary", "runtime-v2.json");
+    const parsed = await readJsonWhenReady(statePath);
+    assert.equal(parsed.version, 2);
+    assert.equal(parsed.sessionName, "Metadata Dashboard");
+    assert.equal(parsed.state, "starting");
+    assert.equal("summary" in parsed, false);
+    assert.equal("phase" in parsed, false);
+    assert.equal("nextAction" in parsed, false);
+
+    events.get("session_shutdown")?.({}, ctx as never);
+  } finally {
+    if (previousHubDir === undefined) delete process.env.PI_AGENT_HUB_DIR;
+    else process.env.PI_AGENT_HUB_DIR = previousHubDir;
+    if (previousSessionId === undefined) delete process.env.PI_AGENT_HUB_SESSION_ID;
+    else process.env.PI_AGENT_HUB_SESSION_ID = previousSessionId;
+    resetExtensionSingleton();
+    await rm(dir, { recursive: true, force: true });
+  }
 });

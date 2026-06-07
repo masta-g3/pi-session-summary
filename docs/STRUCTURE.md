@@ -2,15 +2,14 @@
 
 ## Vision
 
-`pi-session-summary` provides semantic, glanceable status summaries for Pi coding-agent sessions.
+`pi-session-summary` provides semantic, glanceable session metadata for Pi coding-agent sessions.
 
-The project solves a supervision problem: when a user runs several Pi sessions or subagents, deterministic statuses like `running`, `waiting`, or terminal previews do not explain what each agent is actually doing. `pi-session-summary` will use a fast LLM to infer the agent's current workflow stage and produce a short status sentence such as:
+The project solves a supervision problem: deterministic statuses like `running`, `waiting`, or terminal previews do not explain what each agent is trying to accomplish. The extension uses a fast LLM to infer:
 
-```text
-Designing the lightweight summary architecture for Agent Hub integration.
-Debugging model selection for the semantic summary extension.
-Waiting for user approval on the implementation plan.
-```
+- the durable session goal
+- the latest status in context of that goal
+- the next useful step
+- a broad workflow stage
 
 Target users:
 
@@ -23,8 +22,8 @@ Core experience:
 1. Install or load the Pi extension.
 2. Run a Pi session normally.
 3. The extension asynchronously summarizes recent agent activity with a configured fast model.
-4. The user sees a compact summary widget above the editor.
-5. When running under Pi Agent Hub, the extension writes latest-only structured state for future dashboard display.
+4. The user sees a compact status widget above the editor.
+5. When running under Pi Agent Hub, the extension writes latest-only structured metadata for dashboard display.
 
 ## Tech Stack
 
@@ -33,35 +32,33 @@ Core experience:
 | Runtime | Node.js `>=22.19.0` | Matches local Pi `0.78.x` engine requirements. |
 | Language | TypeScript, ESM | Pi packages are TypeScript-friendly; strict types keep the small codebase safe. |
 | Extension host | `@earendil-works/pi-coding-agent` | Provides Pi lifecycle events, commands, settings, and UI hooks. |
-| Model access | `@earendil-works/pi-ai` | Planned LLM completion interface and provider auth handling. |
+| Model access | `@earendil-works/pi-ai` | LLM completion interface and provider auth handling. |
 | TUI helpers | `@earendil-works/pi-tui` | Width-safe rendering for terminal widgets. |
 | Tests | Node test runner | Minimal dependency footprint; enough for pure logic and scheduler tests. |
 | Workflow | `agent-work/` | Multi-session plans, backlog, history, and temporary ticket artifacts. |
 
-Dependency versions in `package.json` are pinned for reproducible scaffolding. Peer dependencies remain broad so the package can load against the active Pi install.
-
 ## Architecture
 
-The package is intentionally a standalone Pi extension, not a Pi Agent Hub-only feature. The extension runs inside the Pi session where semantic event context is available. Agent Hub can later consume the produced state file without owning model calls or scraping terminal output.
+The package is intentionally a standalone Pi extension, not a Pi Agent Hub-only feature. The extension runs inside the Pi session where semantic event context is available. Agent Hub can consume the produced state file without owning model calls or scraping terminal output.
 
 ```mermaid
 flowchart TD
   Session[Pi session] --> Extension[pi-session-summary extension]
   Extension --> Activity[Activity buffer]
   Activity --> Scheduler[One-in-flight summarizer]
-  Scheduler --> Model[Fast summary model]
+  Scheduler --> Model[Fast metadata model]
   Model --> Publish[Sanitize and publish]
-  Publish --> Widget[In-session widget]
-  Publish --> State[Latest summary JSON]
+  Publish --> Widget[In-session status widget]
+  Publish --> State[Latest metadata JSON]
   State --> Hub[Future Pi Agent Hub reader]
 ```
 
-### Current Structure
+## Directory Layout
 
 ```text
 pi-session-summary/
   agent-work/
-    features.yaml              # backlog, initially []
+    features.yaml              # backlog and ticket status
     plans/                     # active implementation plans
     history/                   # archived completed plans
     tickets/                   # temporary validation artifacts
@@ -75,18 +72,12 @@ pi-session-summary/
     naming.ts                  # minimal AI session naming helpers
     state-output.ts            # atomic structured state writer
     text.ts                    # sanitization, truncation, JSON parsing helpers
-    widget.ts                  # width-safe summary widget rendering
+    widget.ts                  # width-safe status widget rendering
   test/
     *.test.ts                  # unit tests for runtime modules
-  .gitignore
-  LICENSE
-  README.md
-  package.json
-  tsconfig.json
-  tsconfig.test.json
 ```
 
-### Runtime Modules
+## Runtime Modules
 
 ```text
 src/
@@ -96,38 +87,37 @@ src/
   models.ts         # model preference parsing and auth/model resolution
   naming.ts         # first-prompt/history extraction and session-name generation
   state-output.ts   # Agent Hub state path and atomic latest-only JSON writes
-  text.ts           # sanitization, truncation, model JSON parsing helpers
-  widget.ts         # width-safe summary widget and no-model warning rendering
+  text.ts           # sanitization, truncation, metadata JSON parsing helpers
+  widget.ts         # width-safe status widget and no-model warning rendering
 ```
-
-### Commands and Settings
 
 `/session-summary` is the command for status, enable/disable, refresh, and naming actions.
 
 `sessionSummary.model` is the only model setting read by this package. If absent or unauthenticated, the extension tries fast Codex-first defaults.
 
-### Data Flow
+## Data Flow
 
 1. Pi emits lifecycle/activity events.
 2. `index.ts` normalizes events into compact facts and stores them in the activity buffer.
 3. The summarizer schedules work with debounce/rate-limit guards.
 4. At most one model request is in flight.
-5. The model returns JSON with a short summary, stage label (`phase`), optional next action, and confidence.
+5. The model returns JSON with `goal`, `status`, `nextStep`, `stage`, and `confidence`.
 6. Text helpers sanitize and validate the response.
-7. The widget updates in the Pi session.
+7. The widget updates in the Pi session with only the latest `status`.
 8. If Agent Hub env vars exist, latest-only JSON is atomically written for the session.
 9. If the session is unnamed, the first user prompt can also generate a short session name with the same model path.
 
 ## Semantic Outputs vs Activity Inputs
 
-The product-level elements are:
+Product-level metadata:
 
 | Element | Runtime representation | Notes |
 | --- | --- | --- |
-| Name | Pi session name | Generated from the first prompt or `/session-summary name`; not written to the summary state file. |
-| Summary | `summary` | One current-status sentence for the widget and Agent Hub state. |
-| Stage label | `phase` | LLM-selected workflow stage such as `planning`, `implementing`, `testing`, `waiting`, or `blocked`. |
-| Next action | `nextAction` | Exported only for waiting, reviewing, blocked, or complete states. |
+| Session name | Pi session name and optional `sessionName` mirror | Generated from the first prompt or `/session-summary name`; dashboard can prefer Pi/Hub's native title. |
+| Goal | `goal` | Short, stable, user-facing outcome. |
+| Status | `status` | Concise latest progress/current action in context of the goal; this is the only in-session widget content. |
+| Next step | `nextStep` | Short next useful step toward the goal, when known. |
+| Stage | `stage` | Model-selected workflow stage such as `planning`, `implementing`, `testing`, `waiting`, or `blocked`. |
 
 Activity facts are different: they are compact internal inputs captured from Pi events (`user`, `assistant`, `tool`, `result`, `final`, `error`) so the model can infer the semantic outputs. Activity facts stay bounded in memory and must not be written to structured output.
 
@@ -159,10 +149,10 @@ Session naming is intentionally smaller than `pi-session-auto-rename`:
 
 Generated names are sanitized to one 2–6 word-ish title line and capped at 80 characters.
 
-### Summary Output
+### Session Metadata
 
 ```ts
-type SummaryPhase =
+type SummaryStage =
   | "starting"
   | "planning"
   | "investigating"
@@ -175,19 +165,20 @@ type SummaryPhase =
   | "blocked"
   | "unknown";
 
-interface SummaryOutput {
-  summary: string;
-  phase: SummaryPhase;
-  nextAction?: string;
+interface ParsedSessionMetadata {
+  goal: string;
+  status: string;
+  stage: SummaryStage;
+  nextStep?: string;
   confidence?: number;
 }
 ```
 
-The summary should describe current workflow state, not mechanics. Avoid phrases like “running bash” unless the command itself is the user-visible task. `nextAction` is only exported for waiting, reviewing, blocked, or complete states so active sessions do not show noisy “keep working” guidance.
+`goal` should remain stable unless the user clearly changes tasks, fit a dashboard row, and describe the user-facing outcome rather than implementation details. `status` should describe current workflow progress, not mechanics. Avoid phrases like “running bash” unless the command itself is the user-visible task. `nextStep` should be actionable, short, and omitted when empty.
 
 ### Agent Hub State File
 
-When `PI_AGENT_HUB_DIR` and `PI_AGENT_HUB_SESSION_ID` are set, the extension will write:
+When `PI_AGENT_HUB_DIR` and `PI_AGENT_HUB_SESSION_ID` are set, the extension writes:
 
 ```text
 ${PI_AGENT_HUB_DIR}/session-summary/${PI_AGENT_HUB_SESSION_ID}.json
@@ -197,14 +188,16 @@ Schema:
 
 ```ts
 interface SessionSummaryStateFile {
-  version: 1;
+  version: 2;
   source: "pi-session-summary";
   sessionId?: string;
   cwd: string;
   state: "starting" | "running" | "waiting" | "complete" | "blocked" | "disabled" | "no_model" | "error" | "shutdown";
-  summary?: string;
-  phase?: SummaryPhase;
-  nextAction?: string;
+  sessionName?: string;
+  goal?: string;
+  status?: string;
+  stage?: SummaryStage;
+  nextStep?: string;
   confidence?: number;
   model?: string;
   sequence: number;
@@ -214,7 +207,7 @@ interface SessionSummaryStateFile {
 }
 ```
 
-Only generated metadata belongs in this file. Raw prompts, tool arguments, command output, and conversation snippets do not.
+`state` is extension/liveness state. `stage` is semantic workflow classification. Only generated metadata belongs in this file. Raw prompts, tool arguments, command output, and conversation snippets do not.
 
 ## Key Patterns
 
@@ -233,6 +226,8 @@ activity -> schedule timer -> model call in flight
             +--- follow-up if needed
 ```
 
+Each new user turn resets the bounded activity buffer, but keeps the latest metadata for prompt continuity. Clear metadata only on session-level resets, disable, or shutdown so `goal` stays stable across turns.
+
 ### Best-effort model calls
 
 Model calls must be:
@@ -243,21 +238,17 @@ Model calls must be:
 - no-retry by default
 - abortable on shutdown or reset
 
-If no authenticated model is available, publish `no_model` state and show a small warning instead of fabricating a summary.
+If no authenticated model is available, publish `no_model` state and show a small warning instead of fabricating metadata.
 
 ### Atomic latest-only state
 
 Structured output should be written only on meaningful changes. Use temp-file + rename and create the parent directory before writing.
 
-### Error handling
-
-Let pure utility errors surface in tests. In runtime event/model paths, catch only at the boundary needed to avoid breaking the Pi session, then publish an `error` state if appropriate.
-
 ### Privacy and data minimization
 
 The model prompt may include short recent snippets to infer semantics. Keep snippets small, avoid storing them outside memory, and never write raw snippets to Agent Hub state.
 
-### Testing approach
+## Testing Approach
 
 Use TDD for implementation work:
 
@@ -267,8 +258,7 @@ Use TDD for implementation work:
 - fake-timer scheduler tests
 - state-output path and atomic write tests
 - width-safe widget rendering tests
-
-Temporary validation artifacts belong in `agent-work/tickets/` and should be removed or archived before commit.
+- representative prompt-evaluation artifacts under `agent-work/tickets/`
 
 ## Development Commands
 
@@ -282,14 +272,15 @@ pi -e ./src/index.ts
 
 ## Future Pi Agent Hub Integration
 
-Agent Hub should remain the consumer, not the summary generator. Future work can read the state file during dashboard refresh and display:
+Agent Hub should remain the consumer, not the metadata generator. The Pi extension renders only status in-session; dashboard integrations should consume the structured state file for high-level session management. Future work can read the state file during dashboard refresh and display:
 
-- session summary in selected-session details
-- optional phase badge or row suffix
-- `nextAction` in details only when present
-- stale summaries as absent after a threshold
+- session name as the main row title
+- goal in details or expanded row context
+- status as recent progress
+- optional stage badge or row suffix
+- next step in details only when present
 
-Agent Hub remains the source of truth for liveness/status (`running`, `waiting`, `stopped`, `error`). `pi-session-summary` should not duplicate those signals with `needsAttention`, `waitingOn`, or separate status lights. The Pi/Hub session title is the durable mission/deliverable; do not add a separate `deliverable` field unless the title contract changes.
+Agent Hub remains the source of truth for process liveness (`running`, `waiting`, `stopped`, `error`). `pi-session-summary` should not duplicate those signals with `needsAttention`, `waitingOn`, or separate status lights.
 
 This preserves a clean boundary:
 

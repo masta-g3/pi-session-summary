@@ -4,7 +4,7 @@ import { formatModelPreference, getSummaryModelAuth, resolveInitialModelPreferen
 import { generateSessionName, getConversationTranscript, getFirstUserMessageText, type SessionEntry } from "./naming.js";
 import { createDefaultTimerScheduler, SessionSummarySummarizer } from "./summarizer.js";
 import { sessionSummaryStatePath, writeSessionSummaryState, type SessionSummaryStateFile } from "./state-output.js";
-import { compactUnknown, sanitizeText } from "./text.js";
+import { compactUnknown, sanitizeText, type ParsedSessionMetadata } from "./text.js";
 import { clearNoModelWarning, clearSessionSummaryWidget, notifyUser, showNoModelWarning, showSessionSummaryWidget } from "./widget.js";
 
 const EXTENSION_KEY = Symbol.for("pi-session-summary.extension.loaded");
@@ -22,11 +22,11 @@ interface RuntimeState {
   summarizer: SessionSummarySummarizer | undefined;
   outputPath: string | undefined;
   sequence: number;
-  latestSummary: string | undefined;
+  latestMetadata: ParsedSessionMetadata | undefined;
   activeModel: string | undefined;
   namingAttempted: boolean;
   namingInProgress: boolean;
-  latestName: string | undefined;
+  latestSessionName: string | undefined;
   writeChain: Promise<void>;
 }
 
@@ -43,11 +43,11 @@ export default function sessionSummary(pi: ExtensionAPI) {
     outputPath: sessionSummaryStatePath(process.env),
     sequence: 0,
     configuredModel: undefined,
-    latestSummary: undefined,
+    latestMetadata: undefined,
     activeModel: undefined,
     namingAttempted: false,
     namingInProgress: false,
-    latestName: undefined,
+    latestSessionName: undefined,
     writeChain: Promise.resolve(),
   };
 
@@ -64,14 +64,15 @@ export default function sessionSummary(pi: ExtensionAPI) {
     state.summarizer = createSummarizer(ctx, state);
     state.namingAttempted = false;
     state.namingInProgress = false;
-    state.latestName = undefined;
+    state.latestSessionName = pi.getSessionName() || undefined;
+    state.latestMetadata = undefined;
     void publishState(ctx, state, { state: "starting" });
   });
 
   pi.on("before_agent_start", (event, ctx) => {
     if (!state.sessionActive || !state.enabled) return;
     state.activity.reset();
-    state.summarizer?.reset();
+    state.summarizer?.reset({ keepMetadata: true });
     const prompt = (event as { prompt?: unknown }).prompt;
     state.activity.record("user", prompt);
     clearSessionSummaryWidget(ctx);
@@ -134,7 +135,7 @@ function registerCommand(pi: ExtensionAPI, state: RuntimeState): void {
     }
     if (action === "off") {
       state.enabled = false;
-      state.latestSummary = undefined;
+      state.latestMetadata = undefined;
       state.summarizer?.setEnabled(false);
       clearSessionSummaryWidget(ctx);
       clearNoModelWarning(ctx);
@@ -180,10 +181,16 @@ function createSummarizer(ctx: ExtensionContext, state: RuntimeState): SessionSu
       else showNoModelWarning(ctx);
       return auth;
     },
-    publish: (summary) => {
-      state.latestSummary = summary.summary;
-      state.activeModel = summary.model;
-      showSessionSummaryWidget(ctx, summary.summary);
+    publish: (metadata) => {
+      state.latestMetadata = {
+        goal: metadata.goal,
+        status: metadata.status,
+        stage: metadata.stage,
+        ...(metadata.nextStep ? { nextStep: metadata.nextStep } : {}),
+        ...(metadata.confidence !== undefined ? { confidence: metadata.confidence } : {}),
+      };
+      state.activeModel = metadata.model;
+      showSessionSummaryWidget(ctx, metadata.status);
     },
     publishState: (partial) => publishState(ctx, state, partial),
   });
@@ -233,7 +240,8 @@ async function generateAndSetName(
     }
     if (!force && pi.getSessionName()) return;
     pi.setSessionName(name);
-    state.latestName = name;
+    state.latestSessionName = name;
+    await publishState(ctx, state, { state: state.latestMetadata ? "running" : "starting" });
     notifyUser(ctx, `Session named: ${name}`);
   } catch (error) {
     notifyUser(ctx, `Session naming failed: ${sanitizeText(error instanceof Error ? error.message : String(error), 160)}`, "error");
@@ -247,16 +255,23 @@ async function publishState(ctx: ExtensionContext, state: RuntimeState, partial:
   const now = Date.now();
   const model = partial.model ?? state.activeModel;
   const output: SessionSummaryStateFile = {
-    version: 1,
+    version: 2,
     source: "pi-session-summary",
     cwd: ctx.cwd,
     state: partial.state ?? "running",
     sequence: state.sequence,
     updatedAt: partial.updatedAt ?? now,
     ...(process.env.PI_AGENT_HUB_SESSION_ID ? { sessionId: process.env.PI_AGENT_HUB_SESSION_ID } : {}),
-    ...(partial.summary ? { summary: partial.summary } : {}),
-    ...(partial.phase ? { phase: partial.phase } : {}),
-    ...(partial.nextAction ? { nextAction: partial.nextAction } : {}),
+    ...(state.latestSessionName ? { sessionName: state.latestSessionName } : {}),
+    ...(state.latestMetadata?.goal ? { goal: state.latestMetadata.goal } : {}),
+    ...(state.latestMetadata?.status ? { status: state.latestMetadata.status } : {}),
+    ...(state.latestMetadata?.stage ? { stage: state.latestMetadata.stage } : {}),
+    ...(state.latestMetadata?.nextStep ? { nextStep: state.latestMetadata.nextStep } : {}),
+    ...(state.latestMetadata?.confidence !== undefined ? { confidence: state.latestMetadata.confidence } : {}),
+    ...(partial.goal ? { goal: partial.goal } : {}),
+    ...(partial.status ? { status: partial.status } : {}),
+    ...(partial.stage ? { stage: partial.stage } : {}),
+    ...(partial.nextStep ? { nextStep: partial.nextStep } : {}),
     ...(partial.confidence !== undefined ? { confidence: partial.confidence } : {}),
     ...(model ? { model } : {}),
     ...(partial.generatedAt ? { generatedAt: partial.generatedAt } : {}),
@@ -275,8 +290,11 @@ async function notifyStatus(ctx: ExtensionContext, state: RuntimeState): Promise
     `enabled: ${state.enabled ? "yes" : "no"}`,
     `selected model: ${formatModelPreference(state.configuredModel)}`,
     `active model: ${state.activeModel ?? "unknown"}`,
-    `latest summary: ${state.latestSummary ?? "none"}`,
-    `latest name: ${state.latestName ?? "none"}`,
+    `latest goal: ${state.latestMetadata?.goal ?? "none"}`,
+    `latest status: ${state.latestMetadata?.status ?? "none"}`,
+    `latest stage: ${state.latestMetadata?.stage ?? "none"}`,
+    `latest next step: ${state.latestMetadata?.nextStep ?? "none"}`,
+    `latest name: ${state.latestSessionName ?? "none"}`,
     `output path: ${state.outputPath ?? "none"}`,
     "commands: /session-summary [status|on|off|refresh|name]",
   ].join("\n"));

@@ -1,21 +1,24 @@
 # pi-session-summary
 
-Semantic session summaries and naming for Pi coding-agent sessions.
+Semantic session metadata and naming for Pi coding-agent sessions.
 
-`pi-session-summary` is a Pi extension package that uses a fast LLM to summarize what an agent is currently doing in workflow terms, then renders that status in-session and exports latest-only structured state for Pi Agent Hub.
+`pi-session-summary` is a Pi extension package that uses a fast LLM to infer what an agent session is trying to accomplish, what changed most recently, and what should happen next. It renders a compact in-session status and exports latest-only structured metadata for Pi Agent Hub or dashboard views.
 
 ## Main elements
 
-The extension produces four semantic elements:
+The extension produces dashboard-oriented semantic metadata:
 
 | Element | Purpose |
 | --- | --- |
-| Session name | Short title generated from the first prompt or conversation history. |
-| Summary | One-sentence description of what the agent is doing now. |
-| Stage label | Workflow phase such as `planning`, `implementing`, `testing`, `waiting`, or `blocked`. |
-| Next action | Optional guidance only when the session is waiting, blocked, reviewing, or complete. |
+| Session name | Short dashboard title generated from the first prompt or conversation history. |
+| Goal | Short durable user-facing outcome for the session. |
+| Status | Concise latest progress or current action in context of the goal. |
+| Next step | Short next useful step toward the goal, when known. |
+| Stage | Broad workflow stage such as `planning`, `implementing`, `testing`, `waiting`, or `blocked`. |
 
-Internally, the extension captures bounded activity facts such as user prompts, assistant text, tool starts/results, final messages, and errors. Those activity facts are inputs for the model only; they are not the main product output and are not written to Agent Hub state.
+The in-session UI intentionally shows only the **status** widget above the editor. The fuller semantic set exists for session-management dashboards or Agent Hub views where many sessions need compact goal, status, stage, and next-step display.
+
+Internally, the extension captures bounded activity facts such as user prompts, assistant text, tool starts/results, final messages, and errors. Those activity facts are inputs for the model only; they are not the product output and are not written to Agent Hub state.
 
 ## Requirements
 
@@ -68,9 +71,30 @@ When running inside a Pi Agent Hub managed session, the extension writes latest-
 ${PI_AGENT_HUB_DIR}/session-summary/${PI_AGENT_HUB_SESSION_ID}.json
 ```
 
-The state file uses `"source": "pi-session-summary"`.
+The state file uses `"source": "pi-session-summary"` and `"version": 2`.
 
-Only generated metadata is written: current summary, stage label (`phase`), optional next action for waiting, reviewing, blocked, or complete states, confidence, and model. Raw prompts, tool arguments, command output, and conversation snippets stay out of the state file.
+```ts
+interface SessionSummaryStateFile {
+  version: 2;
+  source: "pi-session-summary";
+  sessionId?: string;
+  cwd: string;
+  state: "starting" | "running" | "waiting" | "complete" | "blocked" | "disabled" | "no_model" | "error" | "shutdown";
+  sessionName?: string;
+  goal?: string;
+  status?: string;
+  stage?: "starting" | "planning" | "investigating" | "implementing" | "testing" | "debugging" | "reviewing" | "waiting" | "complete" | "blocked" | "unknown";
+  nextStep?: string;
+  confidence?: number;
+  model?: string;
+  sequence: number;
+  updatedAt: number;
+  generatedAt?: number;
+  error?: string;
+}
+```
+
+`state` is extension/liveness state. `stage` is the model-inferred semantic workflow stage. Raw prompts, tool arguments, command output, and conversation snippets stay out of the state file.
 
 ## Privacy and performance
 

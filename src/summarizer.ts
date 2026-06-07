@@ -2,7 +2,7 @@ import { complete, type UserMessage } from "@earendil-works/pi-ai";
 import { activityLines, type ActivityBuffer } from "./activity.js";
 import { formatAuthModel, type SummaryModelAuth } from "./models.js";
 import type { SessionSummaryStateFile } from "./state-output.js";
-import { parseSummaryJson, sanitizeText, type ParsedSummary } from "./text.js";
+import { parseSessionMetadataJson, sanitizeText, type ParsedSessionMetadata } from "./text.js";
 
 export type SummaryModelCall = typeof complete;
 export type AgentState = "running" | "waiting" | "complete" | "blocked";
@@ -12,7 +12,7 @@ export interface TimerScheduler {
   clearTimeout(handle: unknown): void;
 }
 
-export interface SummaryUpdate extends ParsedSummary {
+export interface SessionMetadataUpdate extends ParsedSessionMetadata {
   model: string;
   generatedAt: number;
   sequence: number;
@@ -24,7 +24,7 @@ export interface SessionSummarySummarizerOptions {
   activity: ActivityBuffer;
   generate?: SummaryModelCall;
   getAuth: () => Promise<SummaryModelAuth | undefined>;
-  publish: (summary: SummaryUpdate) => void | Promise<void>;
+  publish: (metadata: SessionMetadataUpdate) => void | Promise<void>;
   publishState: (state: Partial<SessionSummaryStateFile>) => void | Promise<void>;
 }
 
@@ -33,7 +33,7 @@ const NORMAL_DEBOUNCE_MS = 2_000;
 const MIN_MODEL_INTERVAL_MS = 5_000;
 const FINAL_DEBOUNCE_MS = 500;
 const REQUEST_TIMEOUT_MS = 2_500;
-const MAX_SUMMARY_TOKENS = 180;
+const MAX_METADATA_TOKENS = 220;
 
 export function createDefaultTimerScheduler(): TimerScheduler {
   return {
@@ -52,7 +52,7 @@ export class SessionSummarySummarizer {
   private readonly activity: ActivityBuffer;
   private readonly generate: SummaryModelCall;
   private readonly getAuth: () => Promise<SummaryModelAuth | undefined>;
-  private readonly publish: (summary: SummaryUpdate) => void | Promise<void>;
+  private readonly publish: (metadata: SessionMetadataUpdate) => void | Promise<void>;
   private readonly publishState: (state: Partial<SessionSummaryStateFile>) => void | Promise<void>;
   private runId = 0;
   private enabled = true;
@@ -60,7 +60,7 @@ export class SessionSummarySummarizer {
   private inFlight = false;
   private dirtyWhileInFlight = false;
   private lastPublishedAt = Number.NEGATIVE_INFINITY;
-  private latestSummary: string | undefined;
+  private latestMetadata: ParsedSessionMetadata | undefined;
   private abortController: AbortController | undefined;
   private agentState: AgentState = "waiting";
 
@@ -74,22 +74,22 @@ export class SessionSummarySummarizer {
     this.publishState = options.publishState;
   }
 
-  previousSummary(): string | undefined {
-    return this.latestSummary;
+  previousMetadata(): ParsedSessionMetadata | undefined {
+    return this.latestMetadata;
   }
 
   isEnabled(): boolean {
     return this.enabled;
   }
 
-  reset(): void {
+  reset(options: { keepMetadata?: boolean } = {}): void {
     this.runId++;
     this.clearTimer();
     this.abortController?.abort();
     this.abortController = undefined;
     this.inFlight = false;
     this.dirtyWhileInFlight = false;
-    this.latestSummary = undefined;
+    if (!options.keepMetadata) this.latestMetadata = undefined;
     this.lastPublishedAt = Number.NEGATIVE_INFINITY;
     this.agentState = "waiting";
   }
@@ -145,7 +145,7 @@ export class SessionSummarySummarizer {
       }, {
         apiKey: auth.apiKey,
         ...(auth.headers ? { headers: auth.headers } : {}),
-        maxTokens: MAX_SUMMARY_TOKENS,
+        maxTokens: MAX_METADATA_TOKENS,
         maxRetries: 0,
         cacheRetention: "none",
         timeoutMs: REQUEST_TIMEOUT_MS,
@@ -155,7 +155,7 @@ export class SessionSummarySummarizer {
       if (!this.isCurrent(runId)) return;
       if (response.stopReason !== "stop") return;
 
-      const parsed = parseSummaryJson(extractContentText(response.content));
+      const parsed = parseSessionMetadataJson(extractContentText(response.content));
       if (!parsed) return;
 
       const update = {
@@ -163,15 +163,16 @@ export class SessionSummarySummarizer {
         model: formatAuthModel(auth),
         generatedAt: this.now(),
         sequence: this.activity.latestSequence(),
-      } satisfies SummaryUpdate;
-      this.latestSummary = update.summary;
+      } satisfies SessionMetadataUpdate;
+      this.latestMetadata = parsed;
       this.lastPublishedAt = update.generatedAt;
       await this.publish(update);
       await this.publishState({
-        state: phaseToState(update.phase, this.agentState),
-        summary: update.summary,
-        phase: update.phase,
-        ...(shouldPublishNextAction(update.phase, this.agentState, update.nextAction) ? { nextAction: update.nextAction } : {}),
+        state: stageToState(update.stage, this.agentState),
+        goal: update.goal,
+        status: update.status,
+        stage: update.stage,
+        ...(update.nextStep ? { nextStep: update.nextStep } : {}),
         ...(update.confidence !== undefined ? { confidence: update.confidence } : {}),
         model: update.model,
         sequence: update.sequence,
@@ -196,14 +197,25 @@ export class SessionSummarySummarizer {
       "Latest activity, newest last:",
       ...activityLines(this.activity.all()),
       "",
-      "Previous summary, for context only:",
-      this.latestSummary ?? "none",
+      "Previous metadata, for continuity:",
+      this.formatPreviousMetadata(),
       "",
       `Agent state: ${this.agentState}`,
       "",
-      "Summarize what is happening now, not what happened earlier.",
+      "Update the metadata for what is happening now.",
     ];
     return { role: "user", content: [{ type: "text", text: lines.join("\n") }], timestamp: Date.now() };
+  }
+
+  private formatPreviousMetadata(): string {
+    if (!this.latestMetadata) return "none";
+    const parts = [
+      `goal: ${this.latestMetadata.goal}`,
+      `status: ${this.latestMetadata.status}`,
+      this.latestMetadata.nextStep ? `nextStep: ${this.latestMetadata.nextStep}` : undefined,
+      `stage: ${this.latestMetadata.stage}`,
+    ];
+    return parts.filter(Boolean).join("\n");
   }
 
   private isCurrent(runId: number): boolean {
@@ -217,25 +229,21 @@ export class SessionSummarySummarizer {
   }
 }
 
-export const SYSTEM_PROMPT = `You write concise status summaries for a dashboard that monitors many Pi coding-agent sessions.
-Focus on the latest user intent and what the agent is doing now.
-Prefer the active task over older workflow history.
-Use workflow language, not tool mechanics.
-Do not say the agent is changing code unless it is currently editing or planning edits.
-Do not mention commands, files, tools, model internals, or terminal output unless essential.
-Write one present-tense sentence under 120 characters.
-Choose one phase: starting, planning, investigating, implementing, testing, debugging, reviewing, waiting, complete, blocked, unknown.
-Return JSON only with keys: summary, phase, nextAction, confidence.
-Set nextAction only for waiting, blocked, reviewing, or complete; otherwise use an empty string.`;
+export const SYSTEM_PROMPT = `You write dashboard metadata for a Pi coding-agent session.
+Infer:
+- goal: the stable, high-level user-facing outcome of the session, not implementation details.
+- status: the latest meaningful progress or current action in context of that goal.
+- nextStep: the next useful step toward the goal. Use an empty string only if complete or unknowable.
+- stage: one of starting, planning, investigating, implementing, testing, debugging, reviewing, waiting, complete, blocked, unknown.
+Preserve the previous goal unless the user clearly changes the task. Keep goal outcome-oriented, like "Make subagent status easier to monitor".
+Use workflow/domain language, not tool mechanics.
+Do not mention raw commands, files, tools, model internals, or terminal output unless essential to the user-visible task.
+Keep goal under 90 characters, status under 110 characters, and nextStep under 120 characters.
+Return JSON only with keys: goal, status, nextStep, stage, confidence.`;
 
-function shouldPublishNextAction(phase: string, agentState: AgentState, nextAction: string | undefined): nextAction is string {
-  if (!nextAction) return false;
-  return agentState === "waiting" || agentState === "complete" || agentState === "blocked" || phase === "waiting" || phase === "complete" || phase === "blocked" || phase === "reviewing";
-}
-
-function phaseToState(phase: string, agentState: AgentState): SessionSummaryStateFile["state"] {
-  if (phase === "blocked") return "blocked";
-  if (phase === "complete") return "complete";
+function stageToState(stage: string, agentState: AgentState): SessionSummaryStateFile["state"] {
+  if (stage === "blocked") return "blocked";
+  if (stage === "complete") return "complete";
   if (agentState === "complete") return "complete";
   if (agentState === "waiting") return "waiting";
   return "running";
