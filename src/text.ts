@@ -35,9 +35,9 @@ export const SUMMARY_STAGES = new Set<SummaryStage>([
 
 const CONTROL_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u009b]/g;
 const ANSI_PATTERN = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\)|[PX^_].*?\u001b\\|[@-Z\\-_])/g;
-const MAX_GOAL_CHARS = 100;
-const MAX_STATUS_CHARS = 110;
-const MAX_NEXT_STEP_CHARS = 120;
+const MAX_GOAL_CHARS = 48;
+const MAX_STATUS_CHARS = 60;
+const MAX_NEXT_STEP_CHARS = 60;
 
 export function sanitizeText(text: string, maxChars = 800): string {
   const stripped = text

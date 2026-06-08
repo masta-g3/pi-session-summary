@@ -1,8 +1,8 @@
 import { complete, type UserMessage } from "@earendil-works/pi-ai";
 import { activityLines, type ActivityBuffer } from "./activity.js";
 import { formatAuthModel, type SummaryModelAuth } from "./models.js";
-import type { SessionSummaryStateFile } from "./state-output.js";
-import { parseSessionMetadataJson, sanitizeText, type ParsedSessionMetadata } from "./text.js";
+import type { HubSessionMetadataFile } from "./state-output.js";
+import { parseSessionMetadataJson, type ParsedSessionMetadata } from "./text.js";
 
 export type SummaryModelCall = typeof complete;
 export type AgentState = "running" | "waiting" | "complete" | "blocked";
@@ -18,6 +18,8 @@ export interface SessionMetadataUpdate extends ParsedSessionMetadata {
   sequence: number;
 }
 
+export type HubMetadataUpdate = Partial<HubSessionMetadataFile> & { clear?: boolean };
+
 export interface SessionSummarySummarizerOptions {
   now: () => number;
   scheduler: TimerScheduler;
@@ -25,7 +27,7 @@ export interface SessionSummarySummarizerOptions {
   generate?: SummaryModelCall;
   getAuth: () => Promise<SummaryModelAuth | undefined>;
   publish: (metadata: SessionMetadataUpdate) => void | Promise<void>;
-  publishState: (state: Partial<SessionSummaryStateFile>) => void | Promise<void>;
+  publishState: (metadata: HubMetadataUpdate) => void | Promise<void>;
 }
 
 const INITIAL_DEBOUNCE_MS = 1_200;
@@ -53,7 +55,7 @@ export class SessionSummarySummarizer {
   private readonly generate: SummaryModelCall;
   private readonly getAuth: () => Promise<SummaryModelAuth | undefined>;
   private readonly publish: (metadata: SessionMetadataUpdate) => void | Promise<void>;
-  private readonly publishState: (state: Partial<SessionSummaryStateFile>) => void | Promise<void>;
+  private readonly publishState: (metadata: HubMetadataUpdate) => void | Promise<void>;
   private runId = 0;
   private enabled = true;
   private pendingTimer?: unknown;
@@ -133,7 +135,7 @@ export class SessionSummarySummarizer {
       const auth = await this.getAuth();
       if (!this.isCurrent(runId)) return;
       if (!auth) {
-        await this.publishState({ state: "no_model", sequence: this.activity.latestSequence(), updatedAt: this.now() });
+        await this.publishState({ clear: true, updatedAt: this.now() });
         return;
       }
 
@@ -168,20 +170,16 @@ export class SessionSummarySummarizer {
       this.lastPublishedAt = update.generatedAt;
       await this.publish(update);
       await this.publishState({
-        state: stageToState(update.stage, this.agentState),
         goal: update.goal,
         status: update.status,
         stage: update.stage,
         ...(update.nextStep ? { nextStep: update.nextStep } : {}),
         ...(update.confidence !== undefined ? { confidence: update.confidence } : {}),
-        model: update.model,
-        sequence: update.sequence,
-        generatedAt: update.generatedAt,
         updatedAt: this.now(),
       });
     } catch (error) {
       if (this.isCurrent(runId)) {
-        await this.publishState({ state: "error", error: sanitizeText(error instanceof Error ? error.message : String(error), 160), sequence: this.activity.latestSequence(), updatedAt: this.now() });
+        await this.publishState({ clear: true, updatedAt: this.now() });
       }
     } finally {
       if (abortController && this.abortController === abortController) this.abortController = undefined;
@@ -229,25 +227,18 @@ export class SessionSummarySummarizer {
   }
 }
 
-export const SYSTEM_PROMPT = `You write dashboard metadata for a Pi coding-agent session.
+export const SYSTEM_PROMPT = `You write glanceable dashboard metadata for a Pi coding-agent session.
+The dashboard must show at a glance: goal, current stage, whether attention is needed, and what is happening.
 Infer:
-- goal: the stable, high-level user-facing outcome of the session, not implementation details.
-- status: the latest meaningful progress or current action in context of that goal.
-- nextStep: the next useful step toward the goal. Use an empty string only if complete or unknowable.
+- goal: concrete ticket outcome, not the title; avoid generic workflow goals. Max 48 characters.
+- status: terse latest progress achieved. Backward-looking. Max 60 characters.
+- nextStep: next distinct action or need. Forward-looking. Max 60 characters; use "" if none.
 - stage: one of starting, planning, investigating, implementing, testing, debugging, reviewing, waiting, complete, blocked, unknown.
-Preserve the previous goal unless the user clearly changes the task. Keep goal outcome-oriented, like "Make subagent status easier to monitor".
-Use workflow/domain language, not tool mechanics.
-Do not mention raw commands, files, tools, model internals, or terminal output unless essential to the user-visible task.
-Keep goal under 90 characters, status under 110 characters, and nextStep under 120 characters.
+Use compact dashboard fragments, not full sentences. Avoid filler words.
+Make attention obvious through stage and nextStep: use stage "waiting" or "blocked" when user/external action is needed; nextStep may start with "Needs …" in those cases.
+Make status and nextStep complementary: status says what was achieved; nextStep says what happens next. Do not repeat the same information.
+Preserve the previous goal unless the user clearly changes the task.
 Return JSON only with keys: goal, status, nextStep, stage, confidence.`;
-
-function stageToState(stage: string, agentState: AgentState): SessionSummaryStateFile["state"] {
-  if (stage === "blocked") return "blocked";
-  if (stage === "complete") return "complete";
-  if (agentState === "complete") return "complete";
-  if (agentState === "waiting") return "waiting";
-  return "running";
-}
 
 function extractContentText(content: unknown): string {
   if (typeof content === "string") return content;

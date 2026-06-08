@@ -12,8 +12,8 @@ The extension produces dashboard-oriented semantic metadata:
 | --- | --- |
 | Session name | Short dashboard title generated from the first prompt or conversation history. |
 | Goal | Short durable user-facing outcome for the session. |
-| Status | Concise latest progress or current action in context of the goal. |
-| Next step | Short next useful step toward the goal, when known. |
+| Status | Terse latest progress achieved. |
+| Next step | Short distinct next action or need, when useful. |
 | Stage | Broad workflow stage such as `planning`, `implementing`, `testing`, `waiting`, or `blocked`. |
 
 The in-session UI intentionally shows only the **status** widget above the editor. The fuller semantic set exists for session-management dashboards or Agent Hub views where many sessions need compact goal, status, stage, and next-step display.
@@ -65,36 +65,25 @@ The same model is used for optional session naming. The extension auto-names unn
 
 ## Agent Hub output
 
-When running inside a Pi Agent Hub managed session, the extension writes latest-only state to:
+When running inside a Pi Agent Hub managed session, the extension writes latest-only metadata to Hub's generic metadata path:
 
 ```text
-${PI_AGENT_HUB_DIR}/session-summary/${PI_AGENT_HUB_SESSION_ID}.json
+${PI_AGENT_HUB_DIR}/session-metadata/${PI_AGENT_HUB_SESSION_ID}.json
 ```
 
-The state file uses `"source": "pi-session-summary"` and `"version": 2`.
-
 ```ts
-interface SessionSummaryStateFile {
-  version: 2;
-  source: "pi-session-summary";
-  sessionId?: string;
-  cwd: string;
-  state: "starting" | "running" | "waiting" | "complete" | "blocked" | "disabled" | "no_model" | "error" | "shutdown";
-  sessionName?: string;
+interface HubSessionMetadataFile {
+  source?: "pi-session-summary";
   goal?: string;
   status?: string;
-  stage?: "starting" | "planning" | "investigating" | "implementing" | "testing" | "debugging" | "reviewing" | "waiting" | "complete" | "blocked" | "unknown";
   nextStep?: string;
+  stage?: "starting" | "planning" | "investigating" | "implementing" | "testing" | "debugging" | "reviewing" | "waiting" | "complete" | "blocked" | "unknown";
   confidence?: number;
-  model?: string;
-  sequence: number;
-  updatedAt: number;
-  generatedAt?: number;
-  error?: string;
+  updatedAt?: number;
 }
 ```
 
-`state` is extension/liveness state. `stage` is the model-inferred semantic workflow stage. Raw prompts, tool arguments, command output, and conversation snippets stay out of the state file.
+Hub displays metadata when at least one of `goal`, `status`, `nextStep`, or `stage` exists and `confidence` is missing or at least `0.5`. `stage` is the model-inferred semantic workflow stage; Hub process liveness comes from Hub, not this file. Raw prompts, tool arguments, command output, and conversation snippets stay out of the metadata file.
 
 ## Privacy and performance
 

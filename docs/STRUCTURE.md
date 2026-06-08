@@ -39,7 +39,7 @@ Core experience:
 
 ## Architecture
 
-The package is intentionally a standalone Pi extension, not a Pi Agent Hub-only feature. The extension runs inside the Pi session where semantic event context is available. Agent Hub can consume the produced state file without owning model calls or scraping terminal output.
+The package is intentionally a standalone Pi extension, not a Pi Agent Hub-only feature. The extension runs inside the Pi session where semantic event context is available. Agent Hub can consume the produced metadata file without owning model calls or scraping terminal output.
 
 ```mermaid
 flowchart TD
@@ -70,7 +70,7 @@ pi-session-summary/
     summarizer.ts              # throttled model-call scheduler and prompt builder
     models.ts                  # sessionSummary.model setting and auth/model resolution
     naming.ts                  # minimal AI session naming helpers
-    state-output.ts            # atomic structured state writer
+    state-output.ts            # atomic Hub metadata writer
     text.ts                    # sanitization, truncation, JSON parsing helpers
     widget.ts                  # width-safe status widget rendering
   test/
@@ -86,7 +86,7 @@ src/
   summarizer.ts     # one-in-flight LLM scheduler and semantic prompt builder
   models.ts         # model preference parsing and auth/model resolution
   naming.ts         # first-prompt/history extraction and session-name generation
-  state-output.ts   # Agent Hub state path and atomic latest-only JSON writes
+  state-output.ts   # Agent Hub metadata path and atomic latest-only JSON writes
   text.ts           # sanitization, truncation, metadata JSON parsing helpers
   widget.ts         # width-safe status widget and no-model warning rendering
 ```
@@ -113,10 +113,10 @@ Product-level metadata:
 
 | Element | Runtime representation | Notes |
 | --- | --- | --- |
-| Session name | Pi session name and optional `sessionName` mirror | Generated from the first prompt or `/session-summary name`; dashboard can prefer Pi/Hub's native title. |
+| Session name | Pi/Hub native session name | Generated from the first prompt or `/session-summary name`; not written to Hub metadata. |
 | Goal | `goal` | Short, stable, user-facing outcome. |
-| Status | `status` | Concise latest progress/current action in context of the goal; this is the only in-session widget content. |
-| Next step | `nextStep` | Short next useful step toward the goal, when known. |
+| Status | `status` | Concise latest progress achieved in context of the goal; this is the only in-session widget content. |
+| Next step | `nextStep` | Short next useful action or need toward the goal, when known. |
 | Stage | `stage` | Model-selected workflow stage such as `planning`, `implementing`, `testing`, `waiting`, or `blocked`. |
 
 Activity facts are different: they are compact internal inputs captured from Pi events (`user`, `assistant`, `tool`, `result`, `final`, `error`) so the model can infer the semantic outputs. Activity facts stay bounded in memory and must not be written to structured output.
@@ -174,40 +174,31 @@ interface ParsedSessionMetadata {
 }
 ```
 
-`goal` should remain stable unless the user clearly changes tasks, fit a dashboard row, and describe the user-facing outcome rather than implementation details. `status` should describe current workflow progress, not mechanics. Avoid phrases like “running bash” unless the command itself is the user-visible task. `nextStep` should be actionable, short, and omitted when empty.
+`goal` should remain stable unless the user clearly changes tasks, fit a dashboard row, and describe the concrete ticket outcome rather than duplicating the title or using generic workflow phrasing. `status` should be a terse backward-looking dashboard fragment describing latest progress achieved. Avoid phrases like “running bash” unless the command itself is the user-visible task. `nextStep` should be forward-looking, short, distinct from `status`, and omitted when it adds no useful action. Attention needs should appear through `stage` plus `nextStep` (for example, `Needs API credentials`). Parser caps are `goal` 48 chars, `status` 60 chars, and `nextStep` 60 chars.
 
-### Agent Hub State File
+### Agent Hub Metadata File
 
-When `PI_AGENT_HUB_DIR` and `PI_AGENT_HUB_SESSION_ID` are set, the extension writes:
+When `PI_AGENT_HUB_DIR` and `PI_AGENT_HUB_SESSION_ID` are set, the extension writes Hub's generic metadata contract:
 
 ```text
-${PI_AGENT_HUB_DIR}/session-summary/${PI_AGENT_HUB_SESSION_ID}.json
+${PI_AGENT_HUB_DIR}/session-metadata/${PI_AGENT_HUB_SESSION_ID}.json
 ```
 
 Schema:
 
 ```ts
-interface SessionSummaryStateFile {
-  version: 2;
-  source: "pi-session-summary";
-  sessionId?: string;
-  cwd: string;
-  state: "starting" | "running" | "waiting" | "complete" | "blocked" | "disabled" | "no_model" | "error" | "shutdown";
-  sessionName?: string;
+interface HubSessionMetadataFile {
+  source?: "pi-session-summary";
   goal?: string;
   status?: string;
   stage?: SummaryStage;
   nextStep?: string;
   confidence?: number;
-  model?: string;
-  sequence: number;
-  updatedAt: number;
-  generatedAt?: number;
-  error?: string;
+  updatedAt?: number;
 }
 ```
 
-`state` is extension/liveness state. `stage` is semantic workflow classification. Only generated metadata belongs in this file. Raw prompts, tool arguments, command output, and conversation snippets do not.
+Hub displays metadata when at least one of `goal`, `status`, `nextStep`, or `stage` exists and `confidence` is missing or at least `0.5`. Hub ignores package-specific fields such as `version`, `sessionName`, `model`, and `generatedAt`, so the producer does not write them. `stage` is semantic workflow classification; process liveness belongs to Hub, not this file. Raw prompts, tool arguments, command output, and conversation snippets do not.
 
 ## Key Patterns
 
@@ -256,7 +247,7 @@ Use TDD for implementation work:
 - activity-buffer retention and compaction tests
 - model-setting resolution tests
 - fake-timer scheduler tests
-- state-output path and atomic write tests
+- Hub metadata path and atomic write tests
 - width-safe widget rendering tests
 - representative prompt-evaluation artifacts under `agent-work/tickets/`
 
@@ -272,7 +263,7 @@ pi -e ./src/index.ts
 
 ## Future Pi Agent Hub Integration
 
-Agent Hub should remain the consumer, not the metadata generator. The Pi extension renders only status in-session; dashboard integrations should consume the structured state file for high-level session management. Future work can read the state file during dashboard refresh and display:
+Agent Hub should remain the consumer, not the metadata generator. The Pi extension renders only status in-session; dashboard integrations should consume the structured metadata file for high-level session management. Future work can read the metadata file during dashboard refresh and display:
 
 - session name as the main row title
 - goal in details or expanded row context

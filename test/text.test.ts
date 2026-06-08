@@ -43,12 +43,14 @@ test("sanitizes and truncates metadata fields independently", () => {
   const long = "x".repeat(220);
   const parsed = parseSessionMetadataJson(JSON.stringify({
     goal: `\u001b[31m${long}\u001b[0m`,
-    status: "Implemented\nstatus",
-    nextStep: "Reload\tPi",
+    status: long,
+    nextStep: long,
     stage: "testing",
   }));
-  assert.equal(parsed?.goal.length, 100);
+  assert.equal(parsed?.goal.length, 48);
+  assert.equal(parsed?.status.length, 60);
+  assert.equal(parsed?.nextStep?.length, 60);
   assert.equal(parsed?.goal.endsWith("…"), true);
-  assert.equal(parsed?.status, "Implemented status");
-  assert.equal(parsed?.nextStep, "Reload Pi");
+  assert.equal(parsed?.status.endsWith("…"), true);
+  assert.equal(parsed?.nextStep?.endsWith("…"), true);
 });

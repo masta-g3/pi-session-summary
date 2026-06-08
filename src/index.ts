@@ -2,8 +2,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { createActivityBuffer } from "./activity.js";
 import { formatModelPreference, getSummaryModelAuth, resolveInitialModelPreference, type SummaryModelPreference } from "./models.js";
 import { generateSessionName, getConversationTranscript, getFirstUserMessageText, type SessionEntry } from "./naming.js";
-import { createDefaultTimerScheduler, SessionSummarySummarizer } from "./summarizer.js";
-import { sessionSummaryStatePath, writeSessionSummaryState, type SessionSummaryStateFile } from "./state-output.js";
+import { createDefaultTimerScheduler, SessionSummarySummarizer, type HubMetadataUpdate } from "./summarizer.js";
+import { sessionMetadataPath, writeSessionMetadata, type HubSessionMetadataFile } from "./state-output.js";
 import { compactUnknown, sanitizeText, type ParsedSessionMetadata } from "./text.js";
 import { clearNoModelWarning, clearSessionSummaryWidget, notifyUser, showNoModelWarning, showSessionSummaryWidget } from "./widget.js";
 
@@ -40,7 +40,7 @@ export default function sessionSummary(pi: ExtensionAPI) {
     enabled: true,
     activity: createActivityBuffer(),
     summarizer: undefined,
-    outputPath: sessionSummaryStatePath(process.env),
+    outputPath: sessionMetadataPath(process.env),
     sequence: 0,
     configuredModel: undefined,
     latestMetadata: undefined,
@@ -56,7 +56,7 @@ export default function sessionSummary(pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     state.sessionActive = true;
     state.enabled = true;
-    state.outputPath = sessionSummaryStatePath(process.env);
+    state.outputPath = sessionMetadataPath(process.env);
     state.configuredModel = resolveInitialModelPreference(ctx.cwd);
     state.activity.reset();
     clearSessionSummaryWidget(ctx);
@@ -66,7 +66,7 @@ export default function sessionSummary(pi: ExtensionAPI) {
     state.namingInProgress = false;
     state.latestSessionName = pi.getSessionName() || undefined;
     state.latestMetadata = undefined;
-    void publishState(ctx, state, { state: "starting" });
+    void publishMetadata(ctx, state);
   });
 
   pi.on("before_agent_start", (event, ctx) => {
@@ -121,7 +121,8 @@ export default function sessionSummary(pi: ExtensionAPI) {
     state.activity.reset();
     clearSessionSummaryWidget(ctx);
     clearNoModelWarning(ctx);
-    void publishState(ctx, state, { state: "shutdown" });
+    state.latestMetadata = undefined;
+    void publishMetadata(ctx, state);
     delete globalState[EXTENSION_KEY];
   });
 }
@@ -139,7 +140,7 @@ function registerCommand(pi: ExtensionAPI, state: RuntimeState): void {
       state.summarizer?.setEnabled(false);
       clearSessionSummaryWidget(ctx);
       clearNoModelWarning(ctx);
-      await publishState(ctx, state, { state: "disabled" });
+      await publishMetadata(ctx, state);
       notifyUser(ctx, "pi-session-summary disabled");
       return;
     }
@@ -192,7 +193,7 @@ function createSummarizer(ctx: ExtensionContext, state: RuntimeState): SessionSu
       state.activeModel = metadata.model;
       showSessionSummaryWidget(ctx, metadata.status);
     },
-    publishState: (partial) => publishState(ctx, state, partial),
+    publishState: (partial) => publishMetadata(ctx, state, partial),
   });
 }
 
@@ -241,7 +242,7 @@ async function generateAndSetName(
     if (!force && pi.getSessionName()) return;
     pi.setSessionName(name);
     state.latestSessionName = name;
-    await publishState(ctx, state, { state: state.latestMetadata ? "running" : "starting" });
+    await publishMetadata(ctx, state);
     notifyUser(ctx, `Session named: ${name}`);
   } catch (error) {
     notifyUser(ctx, `Session naming failed: ${sanitizeText(error instanceof Error ? error.message : String(error), 160)}`, "error");
@@ -250,36 +251,26 @@ async function generateAndSetName(
   }
 }
 
-async function publishState(ctx: ExtensionContext, state: RuntimeState, partial: Partial<SessionSummaryStateFile>): Promise<void> {
+async function publishMetadata(_ctx: ExtensionContext, state: RuntimeState, partial: HubMetadataUpdate = {}): Promise<void> {
   state.sequence += 1;
-  const now = Date.now();
-  const model = partial.model ?? state.activeModel;
-  const output: SessionSummaryStateFile = {
-    version: 2,
+  const latest = partial.clear ? undefined : state.latestMetadata;
+  const output: HubSessionMetadataFile = {
     source: "pi-session-summary",
-    cwd: ctx.cwd,
-    state: partial.state ?? "running",
-    sequence: state.sequence,
-    updatedAt: partial.updatedAt ?? now,
-    ...(process.env.PI_AGENT_HUB_SESSION_ID ? { sessionId: process.env.PI_AGENT_HUB_SESSION_ID } : {}),
-    ...(state.latestSessionName ? { sessionName: state.latestSessionName } : {}),
-    ...(state.latestMetadata?.goal ? { goal: state.latestMetadata.goal } : {}),
-    ...(state.latestMetadata?.status ? { status: state.latestMetadata.status } : {}),
-    ...(state.latestMetadata?.stage ? { stage: state.latestMetadata.stage } : {}),
-    ...(state.latestMetadata?.nextStep ? { nextStep: state.latestMetadata.nextStep } : {}),
-    ...(state.latestMetadata?.confidence !== undefined ? { confidence: state.latestMetadata.confidence } : {}),
+    updatedAt: partial.updatedAt ?? Date.now(),
+    ...(latest?.goal ? { goal: latest.goal } : {}),
+    ...(latest?.status ? { status: latest.status } : {}),
+    ...(latest?.stage ? { stage: latest.stage } : {}),
+    ...(latest?.nextStep ? { nextStep: latest.nextStep } : {}),
+    ...(latest?.confidence !== undefined ? { confidence: latest.confidence } : {}),
     ...(partial.goal ? { goal: partial.goal } : {}),
     ...(partial.status ? { status: partial.status } : {}),
     ...(partial.stage ? { stage: partial.stage } : {}),
     ...(partial.nextStep ? { nextStep: partial.nextStep } : {}),
     ...(partial.confidence !== undefined ? { confidence: partial.confidence } : {}),
-    ...(model ? { model } : {}),
-    ...(partial.generatedAt ? { generatedAt: partial.generatedAt } : {}),
-    ...(partial.error ? { error: partial.error } : {}),
   };
   state.writeChain = state.writeChain.then(
-    () => writeSessionSummaryState(output, state.outputPath).catch(() => {}),
-    () => writeSessionSummaryState(output, state.outputPath).catch(() => {}),
+    () => writeSessionMetadata(output, state.outputPath).catch(() => {}),
+    () => writeSessionMetadata(output, state.outputPath).catch(() => {}),
   );
   await state.writeChain;
 }

@@ -50,13 +50,13 @@ test("registers only the session-summary command", () => {
   events.get("session_shutdown")?.({}, { cwd: process.cwd(), hasUI: false } as never);
 });
 
-test("writes starting v2 state with mirrored session name", async () => {
+test("writes generic Hub metadata file without ignored display fields", async () => {
   resetExtensionSingleton();
   const dir = await mkdtemp(join(tmpdir(), "pi-session-summary-smoke-"));
   const previousHubDir = process.env.PI_AGENT_HUB_DIR;
   const previousSessionId = process.env.PI_AGENT_HUB_SESSION_ID;
   process.env.PI_AGENT_HUB_DIR = dir;
-  process.env.PI_AGENT_HUB_SESSION_ID = "runtime-v2";
+  process.env.PI_AGENT_HUB_SESSION_ID = "runtime-metadata";
 
   const events = new Map<string, (event: unknown, ctx: unknown) => void>();
   const ctx = { cwd: process.cwd(), hasUI: false };
@@ -72,14 +72,14 @@ test("writes starting v2 state with mirrored session name", async () => {
     } as never);
 
     events.get("session_start")?.({}, ctx as never);
-    const statePath = join(dir, "session-summary", "runtime-v2.json");
+    const statePath = join(dir, "session-metadata", "runtime-metadata.json");
     const parsed = await readJsonWhenReady(statePath);
-    assert.equal(parsed.version, 2);
-    assert.equal(parsed.sessionName, "Metadata Dashboard");
-    assert.equal(parsed.state, "starting");
-    assert.equal("summary" in parsed, false);
-    assert.equal("phase" in parsed, false);
-    assert.equal("nextAction" in parsed, false);
+    assert.equal(parsed.source, "pi-session-summary");
+    assert.equal(typeof parsed.updatedAt, "number");
+    assert.equal("version" in parsed, false);
+    assert.equal("sessionName" in parsed, false);
+    assert.equal("model" in parsed, false);
+    assert.equal("generatedAt" in parsed, false);
 
     events.get("session_shutdown")?.({}, ctx as never);
   } finally {

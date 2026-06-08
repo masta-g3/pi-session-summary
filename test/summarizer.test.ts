@@ -73,8 +73,10 @@ test("publishes parsed model metadata JSON", async () => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal((published[0] as { status: string }).status, "Implemented footer-only default and toggle controls.");
   assert.equal((published[0] as { goal: string }).goal, "Make subagent display compact by default.");
-  assert.equal((states[0] as { state: string }).state, "running");
   assert.equal((states[0] as { status: string }).status, "Implemented footer-only default and toggle controls.");
+  assert.equal("state" in (states[0] as Record<string, unknown>), false);
+  assert.equal("model" in (states[0] as Record<string, unknown>), false);
+  assert.equal("generatedAt" in (states[0] as Record<string, unknown>), false);
   assert.equal("summary" in (states[0] as Record<string, unknown>), false);
   assert.equal("phase" in (states[0] as Record<string, unknown>), false);
   assert.equal("nextAction" in (states[0] as Record<string, unknown>), false);
@@ -99,7 +101,7 @@ test("publishes nextStep while actively running", async () => {
   assert.equal((states[0] as { nextStep?: string }).nextStep, "Reload Pi and launch scouts to confirm the UI.");
 });
 
-test("maps blocked and complete stages to state", async () => {
+test("publishes blocked and complete stages as metadata", async () => {
   for (const stage of ["blocked", "complete"] as const) {
     const scheduler = new FakeScheduler();
     const activity = createActivityBuffer();
@@ -116,7 +118,8 @@ test("maps blocked and complete stages to state", async () => {
     summarizer.schedule("forced", "running");
     scheduler.runNext();
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal((states[0] as { state: string }).state, stage);
+    assert.equal((states[0] as { stage: string }).stage, stage);
+    assert.equal("state" in (states[0] as Record<string, unknown>), false);
   }
 });
 
@@ -177,7 +180,7 @@ test("can preserve previous metadata across per-turn reset", async () => {
   assert.match(prompts[1] ?? "", /goal: Make subagent display compact by default\./);
 });
 
-test("publishes no_model state without fake metadata", async () => {
+test("publishes no model without fake metadata fields", async () => {
   const scheduler = new FakeScheduler();
   const activity = createActivityBuffer();
   const published: unknown[] = [];
@@ -195,7 +198,8 @@ test("publishes no_model state without fake metadata", async () => {
   scheduler.runNext();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(published.length, 0);
-  assert.equal((states[0] as { state: string }).state, "no_model");
+  assert.equal((states[0] as { clear?: boolean }).clear, true);
+  assert.equal(typeof (states[0] as { updatedAt?: unknown }).updatedAt, "number");
 });
 
 test("marks dirty in-flight activity for one follow-up", async () => {
