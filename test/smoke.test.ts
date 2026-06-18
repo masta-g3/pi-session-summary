@@ -30,7 +30,7 @@ test("exports a Pi extension factory", () => {
 test("registers only the session-summary command", () => {
   resetExtensionSingleton();
   const commands = new Map<string, { description: string; handler: unknown }>();
-  const events = new Map<string, (event: unknown, ctx: unknown) => void>();
+  const events = new Map<string, (event: unknown, ctx: unknown) => void | Promise<void>>();
   sessionSummary({
     registerCommand(name: string, command: { description: string; handler: unknown }) {
       commands.set(name, command);
@@ -58,7 +58,7 @@ test("writes generic Hub metadata file without ignored display fields", async ()
   process.env.PI_AGENT_HUB_DIR = dir;
   process.env.PI_AGENT_HUB_SESSION_ID = "runtime-metadata";
 
-  const events = new Map<string, (event: unknown, ctx: unknown) => void>();
+  const events = new Map<string, (event: unknown, ctx: unknown) => void | Promise<void>>();
   const ctx = { cwd: process.cwd(), hasUI: false };
   try {
     sessionSummary({
@@ -81,7 +81,7 @@ test("writes generic Hub metadata file without ignored display fields", async ()
     assert.equal("model" in parsed, false);
     assert.equal("generatedAt" in parsed, false);
 
-    events.get("session_shutdown")?.({}, ctx as never);
+    await events.get("session_shutdown")?.({}, ctx as never);
   } finally {
     if (previousHubDir === undefined) delete process.env.PI_AGENT_HUB_DIR;
     else process.env.PI_AGENT_HUB_DIR = previousHubDir;

@@ -12,9 +12,9 @@ The extension produces dashboard-oriented semantic metadata:
 | --- | --- |
 | Session name | Short dashboard title generated from the first prompt or conversation history. |
 | Goal | Short durable user-facing outcome for the session. |
-| Status | Terse latest progress achieved. |
+| Status | Terse latest verified progress achieved. |
 | Next step | Short distinct next action or need, when useful. |
-| Stage | Broad workflow stage such as `planning`, `implementing`, `testing`, `waiting`, or `blocked`. |
+| Stage | Current mode: `reading`, `editing`, `testing`, `waiting`, `blocked`, or `complete`. |
 
 The in-session UI intentionally shows only the **status** widget above the editor. The fuller semantic set exists for session-management dashboards or Agent Hub views where many sessions need compact goal, status, stage, and next-step display.
 
@@ -77,7 +77,7 @@ interface HubSessionMetadataFile {
   goal?: string;
   status?: string;
   nextStep?: string;
-  stage?: "starting" | "planning" | "investigating" | "implementing" | "testing" | "debugging" | "reviewing" | "waiting" | "complete" | "blocked" | "unknown";
+  stage?: "reading" | "editing" | "testing" | "waiting" | "complete" | "blocked" | "unknown";
   confidence?: number;
   updatedAt?: number;
 }

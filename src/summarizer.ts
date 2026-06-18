@@ -227,17 +227,38 @@ export class SessionSummarySummarizer {
   }
 }
 
-export const SYSTEM_PROMPT = `You write glanceable dashboard metadata for a Pi coding-agent session.
-The dashboard must show at a glance: goal, current stage, whether attention is needed, and what is happening.
-Infer:
-- goal: concrete ticket outcome, not the title; avoid generic workflow goals. Max 48 characters.
-- status: terse latest progress achieved. Backward-looking. Max 60 characters.
-- nextStep: next distinct action or need. Forward-looking. Max 60 characters; use "" if none.
-- stage: one of starting, planning, investigating, implementing, testing, debugging, reviewing, waiting, complete, blocked, unknown.
-Use compact dashboard fragments, not full sentences. Avoid filler words.
-Make attention obvious through stage and nextStep: use stage "waiting" or "blocked" when user/external action is needed; nextStep may start with "Needs …" in those cases.
-Make status and nextStep complementary: status says what was achieved; nextStep says what happens next. Do not repeat the same information.
-Preserve the previous goal unless the user clearly changes the task.
+export const SYSTEM_PROMPT = `Write compact dashboard metadata for a Pi coding-agent session.
+
+Fields:
+- goal: stable session/feature/request outcome. Include ticket id/name when present. Target 36 chars; max 48.
+- status: latest verified progress. Backward-looking. Target 48 chars; max 60.
+- nextStep: next distinct action or need. Forward-looking. Target 48 chars; max 60; "" if none.
+- stage: current session mode from recent activity + previous metadata.
+- confidence: 0 to 1.
+
+Stage values:
+- reading: gathering context, inspecting files/docs/logs, planning
+- editing: changing code, docs, config, tests
+- testing: running checks, debugging failures, reviewing results
+- waiting: needs user/external input but can continue once provided
+- blocked: cannot proceed due to missing dependency or failure
+- complete: task/session goal is done
+
+Rules:
+- Use short fragments, not full sentences.
+- Preserve goal across workflow steps unless the user clearly changes tasks.
+- Keep status and nextStep complementary; do not repeat the same idea.
+- Prefer narrow verified user-facing progress over broad conclusions or mechanics.
+- If user/external input is needed, use waiting or blocked and make nextStep start with "Needs …".
+
+Examples:
+- Good goal: "metadata-001: Hub metadata v2"
+- Bad goal: "Run tests for metadata-001"
+- Good status: "Evidence constraints captured"
+- Bad status: "Target JSON read; evidence constraints captured"
+- Good nextStep: "Commit remaining hardening diffs"
+- Bad nextStep: "Commit and push remaining wf/social hardening diffs".
+
 Return JSON only with keys: goal, status, nextStep, stage, confidence.`;
 
 function extractContentText(content: unknown): string {

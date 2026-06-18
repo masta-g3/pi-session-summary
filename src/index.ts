@@ -114,7 +114,7 @@ export default function sessionSummary(pi: ExtensionAPI) {
     state.summarizer?.schedule("final", "waiting");
   });
 
-  pi.on("session_shutdown", (_event, ctx) => {
+  pi.on("session_shutdown", async (_event, ctx) => {
     state.sessionActive = false;
     state.summarizer?.reset();
     state.summarizer = undefined;
@@ -122,7 +122,7 @@ export default function sessionSummary(pi: ExtensionAPI) {
     clearSessionSummaryWidget(ctx);
     clearNoModelWarning(ctx);
     state.latestMetadata = undefined;
-    void publishMetadata(ctx, state);
+    await publishMetadata(ctx, state);
     delete globalState[EXTENSION_KEY];
   });
 }
@@ -191,7 +191,7 @@ function createSummarizer(ctx: ExtensionContext, state: RuntimeState): SessionSu
         ...(metadata.confidence !== undefined ? { confidence: metadata.confidence } : {}),
       };
       state.activeModel = metadata.model;
-      showSessionSummaryWidget(ctx, metadata.status);
+      showSessionSummaryWidget(ctx, metadata.status, metadata.stage);
     },
     publishState: (partial) => publishMetadata(ctx, state, partial),
   });

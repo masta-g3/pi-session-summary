@@ -115,9 +115,9 @@ Product-level metadata:
 | --- | --- | --- |
 | Session name | Pi/Hub native session name | Generated from the first prompt or `/session-summary name`; not written to Hub metadata. |
 | Goal | `goal` | Short, stable, user-facing outcome. |
-| Status | `status` | Concise latest progress achieved in context of the goal; this is the only in-session widget content. |
+| Status | `status` | Concise latest verified progress achieved in context of the goal; this is the only in-session widget content. |
 | Next step | `nextStep` | Short next useful action or need toward the goal, when known. |
-| Stage | `stage` | Model-selected workflow stage such as `planning`, `implementing`, `testing`, `waiting`, or `blocked`. |
+| Stage | `stage` | Current mode: `reading`, `editing`, `testing`, `waiting`, `blocked`, or `complete`. |
 
 Activity facts are different: they are compact internal inputs captured from Pi events (`user`, `assistant`, `tool`, `result`, `final`, `error`) so the model can infer the semantic outputs. Activity facts stay bounded in memory and must not be written to structured output.
 
@@ -153,13 +153,9 @@ Generated names are sanitized to one 2–6 word-ish title line and capped at 80 
 
 ```ts
 type SummaryStage =
-  | "starting"
-  | "planning"
-  | "investigating"
-  | "implementing"
+  | "reading"
+  | "editing"
   | "testing"
-  | "debugging"
-  | "reviewing"
   | "waiting"
   | "complete"
   | "blocked"
@@ -174,7 +170,7 @@ interface ParsedSessionMetadata {
 }
 ```
 
-`goal` should remain stable unless the user clearly changes tasks, fit a dashboard row, and describe the concrete ticket outcome rather than duplicating the title or using generic workflow phrasing. `status` should be a terse backward-looking dashboard fragment describing latest progress achieved. Avoid phrases like “running bash” unless the command itself is the user-visible task. `nextStep` should be forward-looking, short, distinct from `status`, and omitted when it adds no useful action. Attention needs should appear through `stage` plus `nextStep` (for example, `Needs API credentials`). Parser caps are `goal` 48 chars, `status` 60 chars, and `nextStep` 60 chars.
+`goal` should remain stable across workflow steps unless the user clearly changes tasks, fit a dashboard row, and describe the stable session/feature/request outcome. When a ticket concept exists, include its identifier/name, for example `metadata-001: Hub metadata v2`. `status` should be a terse backward-looking dashboard fragment describing latest verified progress, not broad conclusions or read/parse mechanics. `nextStep` should be forward-looking, short, distinct from `status`, and omitted when it adds no useful action. Attention needs should appear through `stage` plus `nextStep` (for example, `Needs API credentials`). Parser caps are `goal` 48 chars, `status` 60 chars, and `nextStep` 60 chars.
 
 ### Agent Hub Metadata File
 

@@ -7,26 +7,18 @@ export interface ParsedSessionMetadata {
 }
 
 export type SummaryStage =
-  | "starting"
-  | "planning"
-  | "investigating"
-  | "implementing"
+  | "reading"
+  | "editing"
   | "testing"
-  | "debugging"
-  | "reviewing"
   | "waiting"
   | "complete"
   | "blocked"
   | "unknown";
 
 export const SUMMARY_STAGES = new Set<SummaryStage>([
-  "starting",
-  "planning",
-  "investigating",
-  "implementing",
+  "reading",
+  "editing",
   "testing",
-  "debugging",
-  "reviewing",
   "waiting",
   "complete",
   "blocked",

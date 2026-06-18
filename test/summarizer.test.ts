@@ -91,7 +91,7 @@ test("publishes nextStep while actively running", async () => {
     scheduler,
     activity,
     getAuth: async () => auth() as never,
-    generate: (async () => ({ stopReason: "stop", content: [{ type: "text", text: metadataJson({ stage: "implementing" }) }] })) as never,
+    generate: (async () => ({ stopReason: "stop", content: [{ type: "text", text: metadataJson({ stage: "editing" }) }] })) as never,
     publish: () => {},
     publishState: (state) => { states.push(state); },
   });

@@ -20,7 +20,7 @@ test("creates parent directory and writes generic Hub metadata JSON", async () =
     source: "pi-session-summary",
     goal: "Define dashboard metadata.",
     status: "Planning semantic status output.",
-    stage: "planning",
+    stage: "reading",
     nextStep: "Implement parser tests.",
     confidence: 0.86,
     updatedAt: 123,
