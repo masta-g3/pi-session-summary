@@ -240,7 +240,7 @@ Stage values:
 - reading: gathering context, inspecting files/docs/logs, planning
 - editing: changing code, docs, config, tests
 - testing: running checks, debugging failures, reviewing results
-- waiting: needs user/external input but can continue once provided
+- waiting: answered/handoff done; needs user choice, approval, commit, or external validation
 - blocked: cannot proceed due to missing dependency or failure
 - complete: task/session goal is done
 
@@ -249,7 +249,7 @@ Rules:
 - Preserve goal across workflow steps unless the user clearly changes tasks.
 - Keep status and nextStep complementary; do not repeat the same idea.
 - Status should extend stage with narrow verified agent progress, not user requests or mechanics.
-- If user/external input is needed, use waiting or blocked and make nextStep start with "Needs …".
+- If final answer leaves a decision, commit, validation, or unavailable external tool, use waiting/blocked and nextStep "Needs …".
 
 Examples:
 - Good goal: "metadata-001: Hub metadata v2"
