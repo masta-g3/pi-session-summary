@@ -231,7 +231,7 @@ export const SYSTEM_PROMPT = `Write compact dashboard metadata for a Pi coding-a
 
 Fields:
 - goal: stable session/feature/request outcome. Include ticket id/name when present. Target 36 chars; max 48.
-- status: latest verified progress. Backward-looking. Target 48 chars; max 60.
+- status: stage-specific detail on latest verified progress. Backward-looking. Target 48 chars; max 60.
 - nextStep: next distinct action or need. Forward-looking. Target 48 chars; max 60; "" if none.
 - stage: current session mode from recent activity + previous metadata.
 - confidence: 0 to 1.
@@ -248,14 +248,14 @@ Rules:
 - Use short fragments, not full sentences.
 - Preserve goal across workflow steps unless the user clearly changes tasks.
 - Keep status and nextStep complementary; do not repeat the same idea.
-- Prefer narrow verified user-facing progress over broad conclusions or mechanics.
+- Status should extend stage with narrow verified agent progress, not user requests or mechanics.
 - If user/external input is needed, use waiting or blocked and make nextStep start with "Needs …".
 
 Examples:
 - Good goal: "metadata-001: Hub metadata v2"
 - Bad goal: "Run tests for metadata-001"
-- Good status: "Evidence constraints captured"
-- Bad status: "Target JSON read; evidence constraints captured"
+- Good status: "Checking working-tree status"
+- Bad status: "User asked for uncommitted file check"
 - Good nextStep: "Commit remaining hardening diffs"
 - Bad nextStep: "Commit and push remaining wf/social hardening diffs".
 
