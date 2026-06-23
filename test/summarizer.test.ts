@@ -123,6 +123,92 @@ test("publishes blocked and complete stages as metadata", async () => {
   }
 });
 
+test("includes workflow context in prompt at request time", async () => {
+  const scheduler = new FakeScheduler();
+  const activity = createActivityBuffer();
+  const prompts: string[] = [];
+  let contextCalls = 0;
+  const summarizer = new SessionSummarySummarizer({
+    now: () => 10,
+    scheduler,
+    activity,
+    getAuth: async () => auth() as never,
+    getWorkflowContext: async () => {
+      contextCalls++;
+      return {
+        ticketId: "metadata-002",
+        description: "Workflow-grounded session metadata",
+        planFile: "agent-work/plans/metadata-002.md",
+        latestCompletedTodo: "Implement workflow context reader",
+        nextOpenTodo: "Wire context into summarizer prompt",
+        evidence: "explicit-ticket",
+      };
+    },
+    generate: (async (_model: unknown, request: { messages: { content: { text: string }[] }[] }) => {
+      prompts.push(request.messages[0]?.content[0]?.text ?? "");
+      return { stopReason: "stop", content: [{ type: "text", text: metadataJson() }] };
+    }) as never,
+    publish: () => {},
+    publishState: () => {},
+  });
+  summarizer.schedule("forced", "running");
+  assert.equal(contextCalls, 0);
+  scheduler.runNext();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(contextCalls, 1);
+  assert.match(prompts[0] ?? "", /Workflow context from repo files, if explicit:/);
+  assert.match(prompts[0] ?? "", /ticket: metadata-002/);
+  assert.match(prompts[0] ?? "", /nextOpenTodo: Wire context into summarizer prompt/);
+});
+
+test("formats absent workflow context as none", async () => {
+  const scheduler = new FakeScheduler();
+  const activity = createActivityBuffer();
+  let prompt = "";
+  const summarizer = new SessionSummarySummarizer({
+    now: () => 10,
+    scheduler,
+    activity,
+    getAuth: async () => auth() as never,
+    getWorkflowContext: async () => undefined,
+    generate: (async (_model: unknown, request: { messages: { content: { text: string }[] }[] }) => {
+      prompt = request.messages[0]?.content[0]?.text ?? "";
+      return { stopReason: "stop", content: [{ type: "text", text: metadataJson() }] };
+    }) as never,
+    publish: () => {},
+    publishState: () => {},
+  });
+  summarizer.schedule("forced", "running");
+  scheduler.runNext();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(prompt, /Workflow context from repo files, if explicit:\nnone/);
+});
+
+test("treats workflow context failures as absent context", async () => {
+  const scheduler = new FakeScheduler();
+  const activity = createActivityBuffer();
+  let prompt = "";
+  const states: unknown[] = [];
+  const summarizer = new SessionSummarySummarizer({
+    now: () => 10,
+    scheduler,
+    activity,
+    getAuth: async () => auth() as never,
+    getWorkflowContext: async () => { throw new Error("unreadable workflow file"); },
+    generate: (async (_model: unknown, request: { messages: { content: { text: string }[] }[] }) => {
+      prompt = request.messages[0]?.content[0]?.text ?? "";
+      return { stopReason: "stop", content: [{ type: "text", text: metadataJson() }] };
+    }) as never,
+    publish: () => {},
+    publishState: (state) => { states.push(state); },
+  });
+  summarizer.schedule("forced", "running");
+  scheduler.runNext();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(prompt, /Workflow context from repo files, if explicit:\nnone/);
+  assert.equal((states[0] as { status: string }).status, "Implemented footer-only default and toggle controls.");
+});
+
 test("includes previous metadata in follow-up prompt", async () => {
   const scheduler = new FakeScheduler();
   const activity = createActivityBuffer();

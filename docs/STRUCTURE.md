@@ -6,9 +6,9 @@
 
 The project solves a supervision problem: deterministic statuses like `running`, `waiting`, or terminal previews do not explain what each agent is trying to accomplish. The extension uses a fast LLM to infer:
 
-- the durable session goal
+- the durable session or workflow-ticket goal
 - the latest status in context of that goal
-- the next useful step
+- the next explicit evidenced step
 - a broad workflow stage
 
 Target users:
@@ -21,9 +21,10 @@ Core experience:
 
 1. Install or load the Pi extension.
 2. Run a Pi session normally.
-3. The extension asynchronously summarizes recent agent activity with a configured fast model.
-4. The user sees a compact status widget above the editor.
-5. When running under Pi Agent Hub, the extension writes latest-only structured metadata for dashboard display.
+3. The extension optionally reads compact repo workflow context from `agent-work/features.yaml` and feature plan checklists when present.
+4. The extension asynchronously summarizes recent agent activity with a configured fast model.
+5. The user sees a compact status widget above the editor.
+6. When running under Pi Agent Hub, the extension writes latest-only structured metadata for dashboard display.
 
 ## Tech Stack
 
@@ -46,6 +47,7 @@ flowchart TD
   Session[Pi session] --> Extension[pi-session-summary extension]
   Extension --> Activity[Activity buffer]
   Activity --> Scheduler[One-in-flight summarizer]
+  Workflow[Optional agent-work context] --> Scheduler
   Scheduler --> Model[Fast metadata model]
   Model --> Publish[Sanitize and publish]
   Publish --> Widget[In-session status widget]
@@ -70,6 +72,7 @@ pi-session-summary/
     summarizer.ts              # throttled model-call scheduler and prompt builder
     models.ts                  # sessionSummary.model setting and auth/model resolution
     naming.ts                  # minimal AI session naming helpers
+    workflow.ts                # optional workflow-ticket context reader
     state-output.ts            # atomic Hub metadata writer
     text.ts                    # sanitization, truncation, JSON parsing helpers
     widget.ts                  # width-safe status widget rendering
@@ -86,6 +89,7 @@ src/
   summarizer.ts     # one-in-flight LLM scheduler and semantic prompt builder
   models.ts         # model preference parsing and auth/model resolution
   naming.ts         # first-prompt/history extraction and session-name generation
+  workflow.ts       # optional agent-work feature/plan checklist context
   state-output.ts   # Agent Hub metadata path and atomic latest-only JSON writes
   text.ts           # sanitization, truncation, metadata JSON parsing helpers
   widget.ts         # width-safe status widget and no-model warning rendering
@@ -99,13 +103,14 @@ src/
 
 1. Pi emits lifecycle/activity events.
 2. `index.ts` normalizes events into compact facts and stores them in the activity buffer.
-3. The summarizer schedules work with debounce/rate-limit guards.
-4. At most one model request is in flight.
-5. The model returns JSON with `goal`, `status`, `nextStep`, `stage`, and `confidence`.
-6. Text helpers sanitize and validate the response.
-7. The widget updates in the Pi session with only the latest `status`.
-8. If Agent Hub env vars exist, latest-only JSON is atomically written for the session.
-9. If the session is unnamed, the first user prompt can also generate a short session name with the same model path.
+3. When workflow intent or an explicit ticket id is present, `workflow.ts` reads compact optional ticket context from repo-local `agent-work/` files.
+4. The summarizer schedules work with debounce/rate-limit guards.
+5. At most one model request is in flight.
+6. The model returns JSON with `goal`, `status`, `nextStep`, `stage`, and `confidence`.
+7. Text helpers sanitize and validate the response.
+8. The widget updates in the Pi session with only the latest `status`.
+9. If Agent Hub env vars exist, latest-only JSON is atomically written for the session.
+10. If the session is unnamed, workflow tickets get a deterministic `ticket-id: abbreviated objective` name; otherwise the first user prompt can generate a short session name with the same model path.
 
 ## Semantic Outputs vs Activity Inputs
 
@@ -113,10 +118,10 @@ Product-level metadata:
 
 | Element | Runtime representation | Notes |
 | --- | --- | --- |
-| Session name | Pi/Hub native session name | Generated from the first prompt or `/session-summary name`; not written to Hub metadata. |
-| Goal | `goal` | Short, stable, user-facing outcome. |
-| Status | `status` | Concise latest verified progress achieved in context of the goal; this is the only in-session widget content. |
-| Next step | `nextStep` | Short next useful action or need toward the goal, when known. |
+| Session name | Pi/Hub native session name | Deterministic `ticket-id: abbreviated objective` for workflow tickets, otherwise generated from the first prompt or `/session-summary name`; not written to Hub metadata. |
+| Goal | `goal` | Stable user-facing session or ticket objective. |
+| Status | `status` | Concise latest verified progress achieved by the main agent in context of the goal; this is the only in-session widget content. |
+| Next step | `nextStep` | Short explicit planned action or need toward the goal, when evidenced. |
 | Stage | `stage` | Current mode: `reading`, `editing`, `testing`, `waiting`, `blocked`, or `complete`. |
 
 Activity facts are different: they are compact internal inputs captured from Pi events (`user`, `assistant`, `tool`, `result`, `final`, `error`) so the model can infer the semantic outputs. Activity facts stay bounded in memory and must not be written to structured output.
@@ -137,6 +142,15 @@ interface ActivityFact {
 ```
 
 Activity facts are model input only. They must stay bounded and must never be written to structured output.
+
+### Optional Workflow Context
+
+Workflow context is an optional grounding source, not a dependency. When recent activity contains an explicit ticket id, or clearly expresses workflow intent and exactly one feature is `in_progress`, the extension may read:
+
+- `agent-work/features.yaml` for `id`, `description`, `status`, and `plan_file`
+- the referenced Markdown plan for checked/unchecked checklist items
+
+The reader returns only compact evidence: ticket id, description, latest checked todo, and next unchecked todo. Checked todos are context for the model, not automatic `status`; recent activity must support that the main agent just completed or verified that milestone. Unchecked todos are strong evidence for `nextStep`. Missing, ambiguous, or absent workflow files simply produce no context.
 
 ### Session Name
 
@@ -170,7 +184,7 @@ interface ParsedSessionMetadata {
 }
 ```
 
-`goal` should remain stable across workflow steps unless the user clearly changes tasks, fit a dashboard row, and describe the stable session/feature/request outcome. When a ticket concept exists, include its identifier/name, for example `metadata-001: Hub metadata v2`. `status` should be a terse backward-looking dashboard fragment describing latest verified progress, not broad conclusions or read/parse mechanics. `nextStep` should be forward-looking, short, distinct from `status`, and omitted when it adds no useful action. Attention needs should appear through `stage` plus `nextStep` (for example, `Needs API credentials`). Parser caps are `goal` 48 chars, `status` 60 chars, and `nextStep` 60 chars.
+`goal` should remain stable across workflow steps unless the user clearly changes tasks and should describe the stable session/feature/request outcome. When a ticket concept exists, include its identifier/name, for example `metadata-002: Workflow-grounded session metadata and titles`. `status` should be a terse backward-looking dashboard fragment describing latest verified progress by the main agent, not broad conclusions or read/parse mechanics. `nextStep` should be forward-looking, short, distinct from `status`, and omitted when there is no explicit evidence. Evidence can be an unchecked plan item, a stated main-agent plan, a user request, or a final handoff need. Attention needs should appear through `stage` plus `nextStep` (for example, `Needs API credentials`). Parser caps are `goal` 96 chars, `status` 60 chars, and `nextStep` 60 chars.
 
 ### Agent Hub Metadata File
 

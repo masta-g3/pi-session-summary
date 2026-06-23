@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, rm, mkdtemp } from "node:fs/promises";
+import { mkdir, readFile, rm, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -48,6 +48,48 @@ test("registers only the session-summary command", () => {
   assert.ok(events.has("session_start"));
 
   events.get("session_shutdown")?.({}, { cwd: process.cwd(), hasUI: false } as never);
+});
+
+test("auto-names unnamed workflow sessions with deterministic ticket title", async () => {
+  resetExtensionSingleton();
+  const dir = await mkdtemp(join(tmpdir(), "pi-session-summary-name-"));
+  await mkdir(join(dir, "agent-work", "plans"), { recursive: true });
+  await writeFile(join(dir, "agent-work", "features.yaml"), `
+- id: metadata-002
+  status: in_progress
+  description: "Workflow-grounded session metadata and titles for dashboard supervision"
+  plan_file: agent-work/plans/metadata-002.md
+`, "utf8");
+  await writeFile(join(dir, "agent-work", "plans", "metadata-002.md"), "- [ ] Wire context into summarizer prompt\n", "utf8");
+
+  const events = new Map<string, (event: unknown, ctx: unknown) => void | Promise<void>>();
+  let name: string | undefined;
+  const notifications: string[] = [];
+  const ctx = {
+    cwd: dir,
+    hasUI: true,
+    ui: { setWidget() {}, notify(message: string) { notifications.push(message); } },
+    sessionManager: { getBranch: () => [] },
+    modelRegistry: { find: () => undefined, getApiKeyAndHeaders: async () => ({ ok: false }) },
+  };
+  try {
+    sessionSummary({
+      registerCommand() {},
+      on(name: string, handler: (event: unknown, ctx: unknown) => void) { events.set(name, handler); },
+      getSessionName() { return name; },
+      setSessionName(next: string) { name = next; },
+    } as never);
+
+    events.get("session_start")?.({}, ctx as never);
+    events.get("before_agent_start")?.({ prompt: "execute metadata-002" }, ctx as never);
+    for (let attempt = 0; attempt < 20 && !name; attempt++) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(name, "metadata-002: Workflow-grounded metadata");
+    assert.ok(notifications.some((item) => item.includes("Session named:")));
+  } finally {
+    await events.get("session_shutdown")?.({}, ctx as never);
+    resetExtensionSingleton();
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("writes generic Hub metadata file without ignored display fields", async () => {

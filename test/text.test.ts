@@ -47,7 +47,7 @@ test("sanitizes and truncates metadata fields independently", () => {
     nextStep: long,
     stage: "testing",
   }));
-  assert.equal(parsed?.goal.length, 48);
+  assert.equal(parsed?.goal.length, 96);
   assert.equal(parsed?.status.length, 60);
   assert.equal(parsed?.nextStep?.length, 60);
   assert.equal(parsed?.goal.endsWith("…"), true);

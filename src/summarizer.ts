@@ -3,6 +3,7 @@ import { activityLines, type ActivityBuffer } from "./activity.js";
 import { formatAuthModel, type SummaryModelAuth } from "./models.js";
 import type { HubSessionMetadataFile } from "./state-output.js";
 import { parseSessionMetadataJson, type ParsedSessionMetadata } from "./text.js";
+import { formatWorkflowContext, type WorkflowContext } from "./workflow.js";
 
 export type SummaryModelCall = typeof complete;
 export type AgentState = "running" | "waiting" | "complete" | "blocked";
@@ -26,6 +27,7 @@ export interface SessionSummarySummarizerOptions {
   activity: ActivityBuffer;
   generate?: SummaryModelCall;
   getAuth: () => Promise<SummaryModelAuth | undefined>;
+  getWorkflowContext?: () => Promise<WorkflowContext | undefined>;
   publish: (metadata: SessionMetadataUpdate) => void | Promise<void>;
   publishState: (metadata: HubMetadataUpdate) => void | Promise<void>;
 }
@@ -54,6 +56,7 @@ export class SessionSummarySummarizer {
   private readonly activity: ActivityBuffer;
   private readonly generate: SummaryModelCall;
   private readonly getAuth: () => Promise<SummaryModelAuth | undefined>;
+  private readonly getWorkflowContext: () => Promise<WorkflowContext | undefined>;
   private readonly publish: (metadata: SessionMetadataUpdate) => void | Promise<void>;
   private readonly publishState: (metadata: HubMetadataUpdate) => void | Promise<void>;
   private runId = 0;
@@ -72,6 +75,7 @@ export class SessionSummarySummarizer {
     this.activity = options.activity;
     this.generate = options.generate ?? complete;
     this.getAuth = options.getAuth;
+    this.getWorkflowContext = options.getWorkflowContext ?? (async () => undefined);
     this.publish = options.publish;
     this.publishState = options.publishState;
   }
@@ -139,11 +143,14 @@ export class SessionSummarySummarizer {
         return;
       }
 
+      const workflowContext = await this.readOptionalWorkflowContext();
+      if (!this.isCurrent(runId)) return;
+
       abortController = new AbortController();
       this.abortController = abortController;
       const response = await this.generate(auth.model, {
         systemPrompt: SYSTEM_PROMPT,
-        messages: [this.prompt()],
+        messages: [this.prompt(workflowContext)],
       }, {
         apiKey: auth.apiKey,
         ...(auth.headers ? { headers: auth.headers } : {}),
@@ -190,10 +197,21 @@ export class SessionSummarySummarizer {
     }
   }
 
-  private prompt(): UserMessage {
+  private async readOptionalWorkflowContext(): Promise<WorkflowContext | undefined> {
+    try {
+      return await this.getWorkflowContext();
+    } catch {
+      return undefined;
+    }
+  }
+
+  private prompt(workflowContext?: WorkflowContext): UserMessage {
     const lines = [
       "Latest activity, newest last:",
       ...activityLines(this.activity.all()),
+      "",
+      "Workflow context from repo files, if explicit:",
+      formatWorkflowContext(workflowContext),
       "",
       "Previous metadata, for continuity:",
       this.formatPreviousMetadata(),
@@ -230,9 +248,9 @@ export class SessionSummarySummarizer {
 export const SYSTEM_PROMPT = `Write compact dashboard metadata for a Pi coding-agent session.
 
 Fields:
-- goal: stable session/feature/request outcome. Include ticket id/name when present. Target 36 chars; max 48.
-- status: stage-specific detail on latest verified progress. Backward-looking. Target 48 chars; max 60.
-- nextStep: next distinct action or need. Forward-looking. Target 48 chars; max 60; "" if none.
+- goal: stable ticket/session/request objective. Include ticket id when present. Target 72 chars; max 96.
+- status: latest explicit completed or verified progress milestone by the main agent. Backward-looking. Target 48 chars; max 60.
+- nextStep: next explicit plan/todo/user-requested action or handoff need. Forward-looking. Target 48 chars; max 60; "" if not evidenced.
 - stage: current session mode from recent activity + previous metadata.
 - confidence: 0 to 1.
 
@@ -247,14 +265,19 @@ Stage values:
 Rules:
 - Use short fragments, not full sentences.
 - Preserve goal across workflow steps unless the user clearly changes tasks.
+- For workflow tickets, make goal the ticket objective, not the current sub-step.
+- Prefer Workflow context for ticket id, objective, checked plan context, and next open todo when relevant.
 - Keep status and nextStep complementary; do not repeat the same idea.
 - Status should extend stage with narrow verified agent progress, not user requests or mechanics.
+- Do not convert an unchecked todo into status; it can only be nextStep.
+- Use a checked todo as status only when recent activity supports that the main agent just completed/verified it.
+- Derive nextStep only from explicit evidence: an unchecked todo, stated plan, user request, or final handoff need. Do not speculate.
 - If final answer leaves a decision, commit, validation, or unavailable external tool, use waiting/blocked and nextStep "Needs …".
 
 Examples:
 - Good goal: "metadata-001: Hub metadata v2"
 - Bad goal: "Run tests for metadata-001"
-- Good status: "Checking working-tree status"
+- Good status: "Parser tests passing"
 - Bad status: "User asked for uncommitted file check"
 - Good nextStep: "Commit remaining hardening diffs"
 - Bad nextStep: "Commit and push remaining wf/social hardening diffs".

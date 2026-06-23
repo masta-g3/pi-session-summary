@@ -6,6 +6,7 @@ import { createDefaultTimerScheduler, SessionSummarySummarizer, type HubMetadata
 import { sessionMetadataPath, writeSessionMetadata, type HubSessionMetadataFile } from "./state-output.js";
 import { compactUnknown, sanitizeText, type ParsedSessionMetadata } from "./text.js";
 import { clearNoModelWarning, clearSessionSummaryWidget, notifyUser, showNoModelWarning, showSessionSummaryWidget } from "./widget.js";
+import { extractTicketId, hasWorkflowIntent, readWorkflowContext, workflowSessionName, type WorkflowContext } from "./workflow.js";
 
 const EXTENSION_KEY = Symbol.for("pi-session-summary.extension.loaded");
 type SessionSummaryGlobal = typeof globalThis & { [EXTENSION_KEY]?: true };
@@ -27,6 +28,8 @@ interface RuntimeState {
   namingAttempted: boolean;
   namingInProgress: boolean;
   latestSessionName: string | undefined;
+  latestTicketId: string | undefined;
+  latestWorkflowIntent: boolean;
   writeChain: Promise<void>;
 }
 
@@ -48,6 +51,8 @@ export default function sessionSummary(pi: ExtensionAPI) {
     namingAttempted: false,
     namingInProgress: false,
     latestSessionName: undefined,
+    latestTicketId: undefined,
+    latestWorkflowIntent: false,
     writeChain: Promise.resolve(),
   };
 
@@ -65,6 +70,8 @@ export default function sessionSummary(pi: ExtensionAPI) {
     state.namingAttempted = false;
     state.namingInProgress = false;
     state.latestSessionName = pi.getSessionName() || undefined;
+    state.latestTicketId = undefined;
+    state.latestWorkflowIntent = false;
     state.latestMetadata = undefined;
     void publishMetadata(ctx, state);
   });
@@ -74,10 +81,15 @@ export default function sessionSummary(pi: ExtensionAPI) {
     state.activity.reset();
     state.summarizer?.reset({ keepMetadata: true });
     const prompt = (event as { prompt?: unknown }).prompt;
+    const promptText = compactUnknown(prompt, 1_500);
+    const promptTicketId = extractTicketId(promptText);
+    const promptWorkflowIntent = hasWorkflowIntent(promptText);
+    state.latestTicketId = promptTicketId ?? (promptWorkflowIntent ? state.latestTicketId : undefined);
+    state.latestWorkflowIntent = Boolean(promptTicketId) || promptWorkflowIntent;
     state.activity.record("user", prompt);
     clearSessionSummaryWidget(ctx);
     state.summarizer?.schedule("initial", "running");
-    void attemptAutoName(pi, ctx, state, compactUnknown(prompt, 1_500));
+    void attemptAutoName(pi, ctx, state, promptText);
   });
 
   pi.on("message_update", (event, _ctx) => {
@@ -122,6 +134,8 @@ export default function sessionSummary(pi: ExtensionAPI) {
     clearSessionSummaryWidget(ctx);
     clearNoModelWarning(ctx);
     state.latestMetadata = undefined;
+    state.latestTicketId = undefined;
+    state.latestWorkflowIntent = false;
     await publishMetadata(ctx, state);
     delete globalState[EXTENSION_KEY];
   });
@@ -182,6 +196,7 @@ function createSummarizer(ctx: ExtensionContext, state: RuntimeState): SessionSu
       else showNoModelWarning(ctx);
       return auth;
     },
+    getWorkflowContext: () => refreshWorkflowContext(ctx, state),
     publish: (metadata) => {
       state.latestMetadata = {
         goal: metadata.goal,
@@ -197,9 +212,38 @@ function createSummarizer(ctx: ExtensionContext, state: RuntimeState): SessionSu
   });
 }
 
+async function refreshWorkflowContext(ctx: ExtensionContext, state: RuntimeState): Promise<WorkflowContext | undefined> {
+  const context = await readWorkflowContext({
+    cwd: ctx.cwd,
+    ...(state.latestTicketId ? { ticketId: state.latestTicketId } : {}),
+    workflowIntent: state.latestWorkflowIntent,
+  });
+  if (context?.ticketId) state.latestTicketId = context.ticketId;
+  return context;
+}
+
+async function readOptionalWorkflowContext(ctx: ExtensionContext, state: RuntimeState): Promise<WorkflowContext | undefined> {
+  try {
+    return await refreshWorkflowContext(ctx, state);
+  } catch {
+    return undefined;
+  }
+}
+
 async function attemptAutoName(pi: ExtensionAPI, ctx: ExtensionContext, state: RuntimeState, prompt: string | undefined): Promise<void> {
   if (state.namingAttempted || state.namingInProgress) return;
   if (pi.getSessionName()) return;
+
+  const workflowName = workflowSessionName(await readOptionalWorkflowContext(ctx, state));
+  if (workflowName) {
+    state.namingAttempted = true;
+    pi.setSessionName(workflowName);
+    state.latestSessionName = workflowName;
+    await publishMetadata(ctx, state);
+    notifyUser(ctx, `Session named: ${workflowName}`);
+    return;
+  }
+
   const source = prompt ?? getFirstUserMessageText(ctx.sessionManager.getBranch() as SessionEntry[]);
   if (!source) return;
 
@@ -208,6 +252,15 @@ async function attemptAutoName(pi: ExtensionAPI, ctx: ExtensionContext, state: R
 }
 
 async function nameFromHistory(pi: ExtensionAPI, ctx: ExtensionContext, state: RuntimeState): Promise<void> {
+  const workflowName = workflowSessionName(await readOptionalWorkflowContext(ctx, state));
+  if (workflowName) {
+    pi.setSessionName(workflowName);
+    state.latestSessionName = workflowName;
+    await publishMetadata(ctx, state);
+    notifyUser(ctx, `Session named: ${workflowName}`);
+    return;
+  }
+
   const transcript = getConversationTranscript(ctx.sessionManager.getBranch() as SessionEntry[]);
   if (!transcript) {
     notifyUser(ctx, "No user/assistant messages available to name this session.", "error");
