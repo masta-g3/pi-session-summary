@@ -35,3 +35,14 @@
   created_at: '2026-06-21'
   completed_at: '2026-06-22'
   plan_file: agent-work/history/20260622_metadata-002_workflow_metadata.md
+- id: metadata-003
+  epic: metadata
+  status: done
+  title: Append metadata derivation history
+  description: Log each successful derived session metadata update as append-only
+    JSONL correlated with Pi Agent Hub session identity and runtime sequence.
+  priority: 2
+  depends_on: []
+  created_at: '2026-06-26'
+  completed_at: '2026-06-27'
+  plan_file: agent-work/history/20260627_metadata-003_metadata_history.md

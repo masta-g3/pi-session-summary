@@ -1,9 +1,10 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createActivityBuffer } from "./activity.js";
 import { formatModelPreference, getSummaryModelAuth, resolveInitialModelPreference, type SummaryModelPreference } from "./models.js";
+import { appendSessionMetadataLog, metadataLogEntry, sessionMetadataLogPath } from "./metadata-log.js";
 import { generateSessionName, getConversationTranscript, getFirstUserMessageText, type SessionEntry } from "./naming.js";
-import { createDefaultTimerScheduler, SessionSummarySummarizer, type HubMetadataUpdate } from "./summarizer.js";
-import { sessionMetadataPath, writeSessionMetadata, type HubSessionMetadataFile } from "./state-output.js";
+import { createDefaultTimerScheduler, SessionSummarySummarizer, type HubMetadataUpdate, type SessionMetadataUpdate } from "./summarizer.js";
+import { HUB_SESSION_ID_ENV, sessionMetadataPath, writeSessionMetadata, type HubSessionMetadataFile } from "./state-output.js";
 import { compactUnknown, sanitizeText, type ParsedSessionMetadata } from "./text.js";
 import { clearNoModelWarning, clearSessionSummaryWidget, notifyUser, showNoModelWarning, showSessionSummaryWidget } from "./widget.js";
 import { extractTicketId, hasWorkflowIntent, readWorkflowContext, workflowSessionName, type WorkflowContext } from "./workflow.js";
@@ -22,6 +23,8 @@ interface RuntimeState {
   activity: ReturnType<typeof createActivityBuffer>;
   summarizer: SessionSummarySummarizer | undefined;
   outputPath: string | undefined;
+  metadataLogPath: string | undefined;
+  metadataLogSessionId: string | undefined;
   sequence: number;
   latestMetadata: ParsedSessionMetadata | undefined;
   activeModel: string | undefined;
@@ -31,6 +34,7 @@ interface RuntimeState {
   latestTicketId: string | undefined;
   latestWorkflowIntent: boolean;
   writeChain: Promise<void>;
+  logChain: Promise<void>;
 }
 
 export default function sessionSummary(pi: ExtensionAPI) {
@@ -44,6 +48,8 @@ export default function sessionSummary(pi: ExtensionAPI) {
     activity: createActivityBuffer(),
     summarizer: undefined,
     outputPath: sessionMetadataPath(process.env),
+    metadataLogPath: undefined,
+    metadataLogSessionId: undefined,
     sequence: 0,
     configuredModel: undefined,
     latestMetadata: undefined,
@@ -54,6 +60,7 @@ export default function sessionSummary(pi: ExtensionAPI) {
     latestTicketId: undefined,
     latestWorkflowIntent: false,
     writeChain: Promise.resolve(),
+    logChain: Promise.resolve(),
   };
 
   registerCommand(pi, state);
@@ -62,6 +69,8 @@ export default function sessionSummary(pi: ExtensionAPI) {
     state.sessionActive = true;
     state.enabled = true;
     state.outputPath = sessionMetadataPath(process.env);
+    state.metadataLogPath = sessionMetadataLogPath(process.env);
+    state.metadataLogSessionId = state.metadataLogPath ? process.env[HUB_SESSION_ID_ENV] : undefined;
     state.configuredModel = resolveInitialModelPreference(ctx.cwd);
     state.activity.reset();
     clearSessionSummaryWidget(ctx);
@@ -136,7 +145,10 @@ export default function sessionSummary(pi: ExtensionAPI) {
     state.latestMetadata = undefined;
     state.latestTicketId = undefined;
     state.latestWorkflowIntent = false;
+    state.metadataLogPath = undefined;
+    state.metadataLogSessionId = undefined;
     await publishMetadata(ctx, state);
+    await state.logChain;
     delete globalState[EXTENSION_KEY];
   });
 }
@@ -207,9 +219,22 @@ function createSummarizer(ctx: ExtensionContext, state: RuntimeState): SessionSu
       };
       state.activeModel = metadata.model;
       showSessionSummaryWidget(ctx, metadata.status, metadata.stage);
+      logMetadataDerivation(state, metadata);
     },
     publishState: (partial) => publishMetadata(ctx, state, partial),
   });
+}
+
+function logMetadataDerivation(state: RuntimeState, metadata: SessionMetadataUpdate): void {
+  const path = state.metadataLogPath;
+  const sessionId = state.metadataLogSessionId;
+  if (!path || !sessionId) return;
+
+  const entry = metadataLogEntry(sessionId, metadata);
+  state.logChain = state.logChain.then(
+    () => appendSessionMetadataLog(entry, path).catch(() => {}),
+    () => appendSessionMetadataLog(entry, path).catch(() => {}),
+  );
 }
 
 async function refreshWorkflowContext(ctx: ExtensionContext, state: RuntimeState): Promise<WorkflowContext | undefined> {

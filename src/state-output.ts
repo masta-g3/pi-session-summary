@@ -31,6 +31,6 @@ export async function writeSessionMetadata(metadata: HubSessionMetadataFile, pat
   await rename(tempPath, path);
 }
 
-function safeSessionId(sessionId: string): string {
+export function safeSessionId(sessionId: string): string {
   return sessionId.replace(/[^a-zA-Z0-9_.-]/g, "_");
 }

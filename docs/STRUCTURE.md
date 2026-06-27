@@ -25,6 +25,7 @@ Core experience:
 4. The extension asynchronously summarizes recent agent activity with a configured fast model.
 5. The user sees a compact status widget above the editor.
 6. When running under Pi Agent Hub, the extension writes latest-only structured metadata for dashboard display.
+7. When `PI_SESSION_SUMMARY_METADATA_HISTORY=1` is set, successful derivations are also appended as JSONL for debugging.
 
 ## Tech Stack
 
@@ -52,6 +53,7 @@ flowchart TD
   Model --> Publish[Sanitize and publish]
   Publish --> Widget[In-session status widget]
   Publish --> State[Latest metadata JSON]
+  Publish --> History[Debug metadata JSONL]
   State --> Hub[Future Pi Agent Hub reader]
 ```
 
@@ -74,6 +76,7 @@ pi-session-summary/
     naming.ts                  # minimal AI session naming helpers
     workflow.ts                # optional workflow-ticket context reader
     state-output.ts            # atomic Hub metadata writer
+    metadata-log.ts            # opt-in debug JSONL derivation history writer
     text.ts                    # sanitization, truncation, JSON parsing helpers
     widget.ts                  # width-safe status widget rendering
   test/
@@ -91,6 +94,7 @@ src/
   naming.ts         # first-prompt/history extraction and session-name generation
   workflow.ts       # optional agent-work feature/plan checklist context
   state-output.ts   # Agent Hub metadata path and atomic latest-only JSON writes
+  metadata-log.ts   # opt-in debug metadata history path and JSONL appends
   text.ts           # sanitization, truncation, metadata JSON parsing helpers
   widget.ts         # width-safe status widget and no-model warning rendering
 ```
@@ -110,7 +114,8 @@ src/
 7. Text helpers sanitize and validate the response.
 8. The widget updates in the Pi session with only the latest `status`.
 9. If Agent Hub env vars exist, latest-only JSON is atomically written for the session.
-10. If the session is unnamed, workflow tickets get a deterministic `ticket-id: abbreviated objective` name; otherwise the first user prompt can generate a short session name with the same model path.
+10. If `PI_SESSION_SUMMARY_METADATA_HISTORY=1` and Hub env vars exist, the successful derivation is appended to debug JSONL history.
+11. If the session is unnamed, workflow tickets get a deterministic `ticket-id: abbreviated objective` name; otherwise the first user prompt can generate a short session name with the same model path.
 
 ## Semantic Outputs vs Activity Inputs
 
@@ -210,6 +215,16 @@ interface HubSessionMetadataFile {
 
 Hub displays metadata when at least one of `goal`, `status`, `nextStep`, or `stage` exists and `confidence` is missing or at least `0.5`. Hub ignores package-specific fields such as `version`, `sessionName`, `model`, and `generatedAt`, so the producer does not write them. `stage` is semantic workflow classification; process liveness belongs to Hub, not this file. Raw prompts, tool arguments, command output, and conversation snippets do not.
 
+### Debug Metadata History File
+
+When `PI_SESSION_SUMMARY_METADATA_HISTORY=1`, `PI_AGENT_HUB_DIR`, and `PI_AGENT_HUB_SESSION_ID` are set, each successful model-derived metadata update is appended to:
+
+```text
+${PI_AGENT_HUB_DIR}/session-metadata-history/${PI_AGENT_HUB_SESSION_ID}.jsonl
+```
+
+Each JSONL entry includes `source`, raw Hub `sessionId`, `generatedAt`, `activitySequence`, `model`, and a nested `metadata` object containing only sanitized derived `goal`, `status`, `stage`, optional `nextStep`, and optional `confidence`. The filename uses the same sanitized session-id behavior as latest metadata output; the `sessionId` field remains raw for correlation with Hub logs. Clear/no-model/shutdown/name-only updates are not logged.
+
 ## Key Patterns
 
 ### Minimal extension adapter
@@ -245,9 +260,13 @@ If no authenticated model is available, publish `no_model` state and show a smal
 
 Structured output should be written only on meaningful changes. Use temp-file + rename and create the parent directory before writing.
 
+### Opt-in debug history
+
+Derivation history is append-only JSONL and must stay debug opt-in through `PI_SESSION_SUMMARY_METADATA_HISTORY=1`. History append failures should be swallowed like latest metadata write failures so debugging output never breaks widget or Hub latest-state updates.
+
 ### Privacy and data minimization
 
-The model prompt may include short recent snippets to infer semantics. Keep snippets small, avoid storing them outside memory, and never write raw snippets to Agent Hub state.
+The model prompt may include short recent snippets to infer semantics. Keep snippets small, avoid storing them outside memory, and never write raw snippets to Agent Hub state or metadata history.
 
 ## Testing Approach
 
@@ -258,6 +277,7 @@ Use TDD for implementation work:
 - model-setting resolution tests
 - fake-timer scheduler tests
 - Hub metadata path and atomic write tests
+- opt-in metadata history path, entry mapping, and JSONL append tests
 - width-safe widget rendering tests
 - representative prompt-evaluation artifacts under `agent-work/tickets/`
 

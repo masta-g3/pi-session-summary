@@ -91,6 +91,14 @@ interface HubSessionMetadataFile {
 
 Hub displays metadata when at least one of `goal`, `status`, `nextStep`, or `stage` exists and `confidence` is missing or at least `0.5`. `stage` is the model-inferred semantic workflow stage; Hub process liveness comes from Hub, not this file. Raw prompts, tool arguments, command output, plan text, and conversation snippets stay out of the metadata file.
 
+For debugging, set `PI_SESSION_SUMMARY_METADATA_HISTORY=1` to append each successful metadata derivation as JSONL:
+
+```text
+${PI_AGENT_HUB_DIR}/session-metadata-history/${PI_AGENT_HUB_SESSION_ID}.jsonl
+```
+
+Each line includes the Hub session id, generated timestamp, activity sequence, model id, and sanitized derived metadata. Raw prompts, tool arguments/results, workflow plan text, and conversation snippets are not written to the history log.
+
 ## Privacy and performance
 
 Short recent activity snippets and compact optional workflow evidence are sent to the configured summary model provider. Model calls are asynchronous, throttled, timeout-bound, no-retry, and never awaited by Pi event handlers. `nextStep` is intended to come from explicit evidence such as a stated plan, unchecked todo, user request, or handoff need, not from summarizer speculation.
