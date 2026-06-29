@@ -21,6 +21,7 @@
     "check": "tsc --noEmit",
     "build:test": "rm -rf .tmp-test && tsc -p tsconfig.test.json",
     "test": "npm run build:test && node --test .tmp-test/test/*.js",
+    "metadata:quality": "npm run build:test && node .tmp-test/src/metadata-quality.js",
     "pack:dry-run": "npm pack --dry-run"
   },
   "pi": {

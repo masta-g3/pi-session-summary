@@ -35,6 +35,7 @@ interface RuntimeState {
   latestWorkflowIntent: boolean;
   writeChain: Promise<void>;
   logChain: Promise<void>;
+  userTurn: number;
 }
 
 export default function sessionSummary(pi: ExtensionAPI) {
@@ -61,6 +62,7 @@ export default function sessionSummary(pi: ExtensionAPI) {
     latestWorkflowIntent: false,
     writeChain: Promise.resolve(),
     logChain: Promise.resolve(),
+    userTurn: 0,
   };
 
   registerCommand(pi, state);
@@ -82,11 +84,13 @@ export default function sessionSummary(pi: ExtensionAPI) {
     state.latestTicketId = undefined;
     state.latestWorkflowIntent = false;
     state.latestMetadata = undefined;
+    state.userTurn = 0;
     void publishMetadata(ctx, state);
   });
 
   pi.on("before_agent_start", (event, ctx) => {
     if (!state.sessionActive || !state.enabled) return;
+    state.userTurn += 1;
     state.activity.reset();
     state.summarizer?.reset({ keepMetadata: true });
     const prompt = (event as { prompt?: unknown }).prompt;
@@ -147,6 +151,7 @@ export default function sessionSummary(pi: ExtensionAPI) {
     state.latestWorkflowIntent = false;
     state.metadataLogPath = undefined;
     state.metadataLogSessionId = undefined;
+    state.userTurn = 0;
     await publishMetadata(ctx, state);
     await state.logChain;
     delete globalState[EXTENSION_KEY];
@@ -230,7 +235,7 @@ function logMetadataDerivation(state: RuntimeState, metadata: SessionMetadataUpd
   const sessionId = state.metadataLogSessionId;
   if (!path || !sessionId) return;
 
-  const entry = metadataLogEntry(sessionId, metadata);
+  const entry = metadataLogEntry(sessionId, metadata, { userTurn: state.userTurn });
   state.logChain = state.logChain.then(
     () => appendSessionMetadataLog(entry, path).catch(() => {}),
     () => appendSessionMetadataLog(entry, path).catch(() => {}),

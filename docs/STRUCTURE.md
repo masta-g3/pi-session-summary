@@ -77,6 +77,7 @@ pi-session-summary/
     workflow.ts                # optional workflow-ticket context reader
     state-output.ts            # atomic Hub metadata writer
     metadata-log.ts            # opt-in debug JSONL derivation history writer
+    metadata-quality.ts        # JSONL metadata quality scorecard and CLI
     text.ts                    # sanitization, truncation, JSON parsing helpers
     widget.ts                  # width-safe status widget rendering
   test/
@@ -95,6 +96,7 @@ src/
   workflow.ts       # optional agent-work feature/plan checklist context
   state-output.ts   # Agent Hub metadata path and atomic latest-only JSON writes
   metadata-log.ts   # opt-in debug metadata history path and JSONL appends
+  metadata-quality.ts # metadata history parser, scorecard, and CLI
   text.ts           # sanitization, truncation, metadata JSON parsing helpers
   widget.ts         # width-safe status widget and no-model warning rendering
 ```
@@ -223,7 +225,11 @@ When `PI_SESSION_SUMMARY_METADATA_HISTORY=1`, `PI_AGENT_HUB_DIR`, and `PI_AGENT_
 ${PI_AGENT_HUB_DIR}/session-metadata-history/${PI_AGENT_HUB_SESSION_ID}.jsonl
 ```
 
-Each JSONL entry includes `source`, raw Hub `sessionId`, `generatedAt`, `activitySequence`, `model`, and a nested `metadata` object containing only sanitized derived `goal`, `status`, `stage`, optional `nextStep`, and optional `confidence`. The filename uses the same sanitized session-id behavior as latest metadata output; the `sessionId` field remains raw for correlation with Hub logs. Clear/no-model/shutdown/name-only updates are not logged.
+Each JSONL entry includes `source`, raw Hub `sessionId`, `generatedAt`, `activitySequence`, optional `userTurn`, `model`, and a nested `metadata` object containing only sanitized derived `goal`, `status`, `stage`, optional `nextStep`, and optional `confidence`. The filename uses the same sanitized session-id behavior as latest metadata output; the `sessionId` field remains raw for correlation with Hub logs. Clear/no-model/shutdown/name-only updates are not logged.
+
+`userTurn` increments on each `before_agent_start` and groups multiple metadata updates caused by one user request. Entries without `userTurn` are grouped as `unknown` by the quality tool.
+
+`src/metadata-quality.ts` can parse this JSONL, group entries by turn, score final entries more strictly than transient updates, and report issues by category. Use it for debugging prompt/metadata quality, not as a CI gate for real model behavior.
 
 ## Key Patterns
 
@@ -278,6 +284,7 @@ Use TDD for implementation work:
 - fake-timer scheduler tests
 - Hub metadata path and atomic write tests
 - opt-in metadata history path, entry mapping, and JSONL append tests
+- metadata quality parser/grouping/scorecard tests
 - width-safe widget rendering tests
 - representative prompt-evaluation artifacts under `agent-work/tickets/`
 
@@ -287,6 +294,7 @@ Use TDD for implementation work:
 npm install
 npm run check
 npm test
+npm run metadata:quality -- <metadata-history.jsonl>
 npm run pack:dry-run
 pi -e ./src/index.ts
 ```

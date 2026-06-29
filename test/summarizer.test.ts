@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createActivityBuffer } from "../src/activity.js";
-import { SessionSummarySummarizer, type TimerScheduler } from "../src/summarizer.js";
+import { SessionSummarySummarizer, SYSTEM_PROMPT, type TimerScheduler } from "../src/summarizer.js";
 
 class FakeScheduler implements TimerScheduler {
   timers: { callback: () => void; delayMs: number; active: boolean }[] = [];
@@ -35,6 +35,12 @@ function metadataJson(overrides: Record<string, unknown> = {}) {
     ...overrides,
   });
 }
+
+test("prompt guides status and nextStep toward latest exchange evidence", () => {
+  assert.match(SYSTEM_PROMPT, /For status, prioritize the latest user-agent exchange/);
+  assert.match(SYSTEM_PROMPT, /For nextStep, prioritize the latest explicit user request/);
+  assert.match(SYSTEM_PROMPT, /do not reuse previous status or nextStep unless latest activity independently supports it/);
+});
 
 test("uses initial debounce before first model call", () => {
   const scheduler = new FakeScheduler();

@@ -265,12 +265,15 @@ Stage values:
 Rules:
 - Use short fragments, not full sentences.
 - Preserve goal across workflow steps unless the user clearly changes tasks.
+- Previous metadata is continuity context only. Preserve prior goal when still relevant, but do not reuse previous status or nextStep unless latest activity independently supports it.
 - For workflow tickets, make goal the ticket objective, not the current sub-step.
 - Prefer Workflow context for ticket id, objective, checked plan context, and next open todo when relevant.
 - Keep status and nextStep complementary; do not repeat the same idea.
+- For status, prioritize the latest user-agent exchange and report only verified main-agent progress.
 - Status should extend stage with narrow verified agent progress, not user requests or mechanics.
 - Do not convert an unchecked todo into status; it can only be nextStep.
 - Use a checked todo as status only when recent activity supports that the main agent just completed/verified it.
+- For nextStep, prioritize the latest explicit user request, stated plan, unchecked todo, or handoff need.
 - Derive nextStep only from explicit evidence: an unchecked todo, stated plan, user request, or final handoff need. Do not speculate.
 - If final answer leaves a decision, commit, validation, or unavailable external tool, use waiting/blocked and nextStep "Needs …".
 

@@ -11,6 +11,7 @@ export interface SessionMetadataLogEntry {
   sessionId: string;
   generatedAt: number;
   activitySequence: number;
+  userTurn?: number;
   model: string;
   metadata: {
     goal: string;
@@ -29,12 +30,13 @@ export function sessionMetadataLogPath(env: NodeJS.ProcessEnv = process.env): st
   return join(stateDir, "session-metadata-history", `${safeSessionId(sessionId)}.jsonl`);
 }
 
-export function metadataLogEntry(sessionId: string, metadata: SessionMetadataUpdate): SessionMetadataLogEntry {
+export function metadataLogEntry(sessionId: string, metadata: SessionMetadataUpdate, options: { userTurn?: number } = {}): SessionMetadataLogEntry {
   return {
     source: "pi-session-summary",
     sessionId,
     generatedAt: metadata.generatedAt,
     activitySequence: metadata.sequence,
+    ...(options.userTurn !== undefined ? { userTurn: options.userTurn } : {}),
     model: metadata.model,
     metadata: {
       goal: metadata.goal,
@@ -46,7 +48,7 @@ export function metadataLogEntry(sessionId: string, metadata: SessionMetadataUpd
   };
 }
 
-export async function appendSessionMetadataLog(entry: SessionMetadataLogEntry, path = sessionMetadataLogPath()): Promise<void> {
+export async function appendSessionMetadataLog(entry: SessionMetadataLogEntry, path?: string): Promise<void> {
   if (!path) return;
   await mkdir(dirname(path), { recursive: true });
   await appendFile(path, `${JSON.stringify(entry)}\n`, "utf8");

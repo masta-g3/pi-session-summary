@@ -46,3 +46,16 @@
   created_at: '2026-06-26'
   completed_at: '2026-06-27'
   plan_file: agent-work/history/20260627_metadata-003_metadata_history.md
+- id: metadata-004
+  epic: metadata
+  status: done
+  title: Evaluate and refine metadata quality
+  description: Add a focused metadata quality evaluation path with prompt recency
+    rules, turn correlation, scenario scoring, and final-state checks while preserving
+    privacy and hermetic tests.
+  priority: 2
+  depends_on:
+  - metadata-003
+  created_at: '2026-06-28'
+  completed_at: '2026-06-28'
+  plan_file: agent-work/history/20260628_metadata-004_metadata_quality.md

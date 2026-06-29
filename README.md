@@ -97,7 +97,13 @@ For debugging, set `PI_SESSION_SUMMARY_METADATA_HISTORY=1` to append each succes
 ${PI_AGENT_HUB_DIR}/session-metadata-history/${PI_AGENT_HUB_SESSION_ID}.jsonl
 ```
 
-Each line includes the Hub session id, generated timestamp, activity sequence, model id, and sanitized derived metadata. Raw prompts, tool arguments/results, workflow plan text, and conversation snippets are not written to the history log.
+Each line includes the Hub session id, generated timestamp, activity sequence, optional `userTurn` correlation number, model id, and sanitized derived metadata. Raw prompts, tool arguments/results, workflow plan text, and conversation snippets are not written to the history log.
+
+To inspect a captured history file, run:
+
+```bash
+npm run metadata:quality -- ${PI_AGENT_HUB_DIR}/session-metadata-history/${PI_AGENT_HUB_SESSION_ID}.jsonl
+```
 
 ## Privacy and performance
 
