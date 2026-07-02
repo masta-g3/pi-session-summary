@@ -59,6 +59,71 @@ test("uses initial debounce before first model call", () => {
   assert.equal(scheduler.timers[0]?.delayMs, 1_200);
 });
 
+test("flushes pending final metadata without waiting for debounce", async () => {
+  const scheduler = new FakeScheduler();
+  const activity = createActivityBuffer();
+  const states: unknown[] = [];
+  let calls = 0;
+  activity.record("final", "Explained metadata quality behavior.");
+  const summarizer = new SessionSummarySummarizer({
+    now: () => 10,
+    scheduler,
+    activity,
+    getAuth: async () => auth() as never,
+    generate: (async (_model: unknown, request: { messages: { content: { text: string }[] }[] }) => {
+      calls++;
+      assert.match(request.messages[0]?.content[0]?.text ?? "", /Agent state: complete/);
+      return { stopReason: "stop", content: [{ type: "text", text: metadataJson({ stage: "complete", status: "Metadata quality behavior explained", nextStep: "" }) }] };
+    }) as never,
+    publish: () => {},
+    publishState: (state) => { states.push(state); },
+  });
+  summarizer.schedule("final", "complete");
+  assert.equal(scheduler.timers[0]?.delayMs, 500);
+
+  await summarizer.flushPending("complete");
+
+  assert.equal(calls, 1);
+  assert.equal(scheduler.timers.some((timer) => timer.active), false);
+  assert.equal((states[0] as { stage: string }).stage, "complete");
+});
+
+test("flush waits for in-flight metadata before final follow-up", async () => {
+  const scheduler = new FakeScheduler();
+  const activity = createActivityBuffer();
+  const states: unknown[] = [];
+  let resolveGenerate: ((value: unknown) => void) | undefined;
+  let calls = 0;
+  const prompts: string[] = [];
+  activity.record("user", "Explain metadata history.");
+  const summarizer = new SessionSummarySummarizer({
+    now: () => 10,
+    scheduler,
+    activity,
+    getAuth: async () => auth() as never,
+    generate: ((_: unknown, request: { messages: { content: { text: string }[] }[] }) => {
+      calls++;
+      prompts.push(request.messages[0]?.content[0]?.text ?? "");
+      if (calls === 1) return new Promise((resolve) => { resolveGenerate = resolve; });
+      return Promise.resolve({ stopReason: "stop", content: [{ type: "text", text: metadataJson({ stage: "complete", status: "Metadata history explained", nextStep: "" }) }] });
+    }) as never,
+    publish: () => {},
+    publishState: (state) => { states.push(state); },
+  });
+  summarizer.schedule("forced", "running");
+  scheduler.runNext();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  activity.record("final", "Metadata history explained.");
+  const flush = summarizer.flushPending("complete", 1_000);
+  resolveGenerate?.({ stopReason: "stop", content: [{ type: "text", text: metadataJson({ stage: "reading", status: "Reading metadata history docs" }) }] });
+  await flush;
+
+  assert.equal(calls, 2);
+  assert.match(prompts[1] ?? "", /Agent state: complete/);
+  assert.equal((states.at(-1) as { stage: string }).stage, "complete");
+});
+
 test("publishes parsed model metadata JSON", async () => {
   const scheduler = new FakeScheduler();
   const activity = createActivityBuffer();

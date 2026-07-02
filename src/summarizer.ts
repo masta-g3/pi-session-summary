@@ -36,6 +36,7 @@ const INITIAL_DEBOUNCE_MS = 1_200;
 const NORMAL_DEBOUNCE_MS = 2_000;
 const MIN_MODEL_INTERVAL_MS = 5_000;
 const FINAL_DEBOUNCE_MS = 500;
+const FINAL_FLUSH_TIMEOUT_MS = 1_500;
 const REQUEST_TIMEOUT_MS = 2_500;
 const MAX_METADATA_TOKENS = 220;
 
@@ -68,6 +69,7 @@ export class SessionSummarySummarizer {
   private latestMetadata: ParsedSessionMetadata | undefined;
   private abortController: AbortController | undefined;
   private agentState: AgentState = "waiting";
+  private idleWaiters: Array<() => void> = [];
 
   constructor(options: SessionSummarySummarizerOptions) {
     this.now = options.now;
@@ -95,6 +97,7 @@ export class SessionSummarySummarizer {
     this.abortController = undefined;
     this.inFlight = false;
     this.dirtyWhileInFlight = false;
+    this.resolveIdleWaiters();
     if (!options.keepMetadata) this.latestMetadata = undefined;
     this.lastPublishedAt = Number.NEGATIVE_INFINITY;
     this.agentState = "waiting";
@@ -119,6 +122,21 @@ export class SessionSummarySummarizer {
       this.pendingTimer = undefined;
       void this.runRequest(this.runId);
     }, delay);
+  }
+
+  async flushPending(agentState: AgentState = this.agentState, timeoutMs = FINAL_FLUSH_TIMEOUT_MS): Promise<void> {
+    this.agentState = agentState;
+    if (!this.enabled) return;
+    const deadline = Date.now() + timeoutMs;
+
+    if (this.inFlight) {
+      this.dirtyWhileInFlight = true;
+      await this.withTimeout(this.waitForIdle(), timeoutMs);
+    }
+    if (!this.enabled || this.inFlight || this.pendingTimer === undefined) return;
+
+    this.clearTimer();
+    await this.withTimeout(this.runRequest(this.runId), Math.max(0, deadline - Date.now()));
   }
 
   private delayFor(reason: "initial" | "normal" | "final" | "forced"): number {
@@ -193,8 +211,19 @@ export class SessionSummarySummarizer {
       if (this.isCurrent(runId)) {
         this.inFlight = false;
         if (this.dirtyWhileInFlight) this.schedule("normal", this.agentState);
+        this.resolveIdleWaiters();
       }
     }
+  }
+
+  private waitForIdle(): Promise<void> {
+    if (!this.inFlight) return Promise.resolve();
+    return new Promise((resolve) => this.idleWaiters.push(resolve));
+  }
+
+  private resolveIdleWaiters(): void {
+    const waiters = this.idleWaiters.splice(0);
+    for (const resolve of waiters) resolve();
   }
 
   private async readOptionalWorkflowContext(): Promise<WorkflowContext | undefined> {
@@ -202,6 +231,24 @@ export class SessionSummarySummarizer {
       return await this.getWorkflowContext();
     } catch {
       return undefined;
+    }
+  }
+
+  private async withTimeout(task: Promise<void>, timeoutMs: number): Promise<void> {
+    if (timeoutMs <= 0) {
+      await task;
+      return;
+    }
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        task,
+        new Promise<void>((resolve) => {
+          timeout = setTimeout(resolve, timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
     }
   }
 

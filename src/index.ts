@@ -36,6 +36,7 @@ interface RuntimeState {
   writeChain: Promise<void>;
   logChain: Promise<void>;
   userTurn: number;
+  finalFlushState: "waiting" | "complete" | undefined;
 }
 
 export default function sessionSummary(pi: ExtensionAPI) {
@@ -63,6 +64,7 @@ export default function sessionSummary(pi: ExtensionAPI) {
     writeChain: Promise.resolve(),
     logChain: Promise.resolve(),
     userTurn: 0,
+    finalFlushState: undefined,
   };
 
   registerCommand(pi, state);
@@ -85,12 +87,14 @@ export default function sessionSummary(pi: ExtensionAPI) {
     state.latestWorkflowIntent = false;
     state.latestMetadata = undefined;
     state.userTurn = 0;
+    state.finalFlushState = undefined;
     void publishMetadata(ctx, state);
   });
 
   pi.on("before_agent_start", (event, ctx) => {
     if (!state.sessionActive || !state.enabled) return;
     state.userTurn += 1;
+    state.finalFlushState = undefined;
     state.activity.reset();
     state.summarizer?.reset({ keepMetadata: true });
     const prompt = (event as { prompt?: unknown }).prompt;
@@ -131,15 +135,19 @@ export default function sessionSummary(pi: ExtensionAPI) {
     if (stopReason === "toolUse" || hasToolUse(messageEnd.message)) return;
     const text = finalMessageText(messageEnd.message) ?? compactUnknown(messageEnd.message, 900);
     if (text) state.activity.record(stopReason === "error" ? "error" : "final", text);
+    state.finalFlushState = "complete";
     state.summarizer?.schedule("final", "complete");
   });
 
   pi.on("agent_end", (_event, _ctx) => {
     if (!state.sessionActive || !state.enabled) return;
-    state.summarizer?.schedule("final", "waiting");
+    state.finalFlushState ??= "waiting";
+    state.summarizer?.schedule("final", state.finalFlushState);
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
+    if (state.finalFlushState) await state.summarizer?.flushPending(state.finalFlushState);
+    const keepFinalMetadata = state.finalFlushState !== undefined && state.latestMetadata?.stage === state.finalFlushState;
     state.sessionActive = false;
     state.summarizer?.reset();
     state.summarizer = undefined;
@@ -152,7 +160,8 @@ export default function sessionSummary(pi: ExtensionAPI) {
     state.metadataLogPath = undefined;
     state.metadataLogSessionId = undefined;
     state.userTurn = 0;
-    await publishMetadata(ctx, state);
+    state.finalFlushState = undefined;
+    if (!keepFinalMetadata) await publishMetadata(ctx, state);
     await state.logChain;
     delete globalState[EXTENSION_KEY];
   });
