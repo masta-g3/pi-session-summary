@@ -2,10 +2,10 @@ import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { sanitizeText, type SummaryStage } from "./text.js";
+import type { PlanProgress } from "./workflow.js";
 
 export const WIDGET_KEY = "pi-session-summary";
 export const WARNING_WIDGET_KEY = "pi-session-summary-warning";
-const TITLE = " status ";
 const WARNING = "no session summary model authenticated";
 const MIN_BOX_WIDTH = 16;
 
@@ -19,8 +19,12 @@ const STAGE_LABELS: Record<SummaryStage, string> = {
   unknown: "STATUS",
 };
 
+export type SessionSummaryContent =
+  | { kind: "status"; status: string; stage: SummaryStage; nextStep?: string }
+  | { kind: "plan"; progress: PlanProgress; nextStep?: string };
+
 export function formatStatusLine(status: string, stage: SummaryStage): string {
-  return `${STAGE_LABELS[stage]}: ${status}`;
+  return `${STAGE_LABELS[stage]} · ${status}`;
 }
 
 class WarningLine implements Component {
@@ -32,24 +36,25 @@ class WarningLine implements Component {
 }
 
 export class SessionSummaryBox implements Component {
-  constructor(private readonly theme: Theme, private readonly status: string, private readonly stage: SummaryStage = "unknown") {}
+  constructor(private readonly theme: Theme, private readonly content: SessionSummaryContent) {}
   invalidate(): void {}
   render(width: number): string[] {
-    const safeStatus = sanitizeText(formatStatusLine(this.status, this.stage), 220);
-    if (width < MIN_BOX_WIDTH) return [truncateToWidth(`status: ${safeStatus}`, width)];
+    const lines = contentLines(this.content);
+    const title = ` ${this.content.kind} `;
+    if (width < MIN_BOX_WIDTH) return [truncateToWidth(`${this.content.kind}: ${lines.join(" · ")}`, width)];
 
     const contentWidth = Math.max(1, width - 4);
-    const lines = wrapTextWithAnsi(safeStatus, contentWidth);
+    const wrapped = lines.flatMap((line) => wrapTextWithAnsi(sanitizeText(line, 220), contentWidth));
     return [
-      this.topBorder(width),
-      ...(lines.length ? lines : [""]).map((line) => this.contentLine(line, contentWidth)),
+      this.topBorder(width, title),
+      ...(wrapped.length ? wrapped : [""]).map((line) => this.contentLine(line, contentWidth)),
       this.bottomBorder(width),
     ];
   }
 
-  private topBorder(width: number): string {
-    const rightWidth = Math.max(1, width - visibleWidth(TITLE) - 2);
-    return this.theme.fg("borderMuted", `╭${TITLE}${"─".repeat(rightWidth)}╮`);
+  private topBorder(width: number, title: string): string {
+    const rightWidth = Math.max(1, width - visibleWidth(title) - 2);
+    return this.theme.fg("borderMuted", `╭${title}${"─".repeat(rightWidth)}╮`);
   }
 
   private bottomBorder(width: number): string {
@@ -62,14 +67,9 @@ export class SessionSummaryBox implements Component {
   }
 }
 
-export function showSessionSummaryWidget(ctx: ExtensionContext, status: string, stage: SummaryStage = "unknown"): void {
+export function showSessionSummaryWidget(ctx: ExtensionContext, content: SessionSummaryContent): void {
   if (!ctx.hasUI) return;
-  const safeStatus = sanitizeText(status, 220);
-  if (!safeStatus) {
-    clearSessionSummaryWidget(ctx);
-    return;
-  }
-  ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => new SessionSummaryBox(theme, safeStatus, stage), { placement: "aboveEditor" });
+  ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => new SessionSummaryBox(theme, content), { placement: "aboveEditor" });
 }
 
 export function clearSessionSummaryWidget(ctx: ExtensionContext): void {
@@ -90,4 +90,18 @@ export function clearNoModelWarning(ctx: ExtensionContext): void {
 export function notifyUser(ctx: ExtensionContext, message: string, level: "info" | "error" = "info"): void {
   if (!ctx.hasUI) return;
   ctx.ui.notify(message, level);
+}
+
+function contentLines(content: SessionSummaryContent): string[] {
+  if (content.kind === "status") {
+    return [
+      formatStatusLine(content.status, content.stage),
+      ...(content.nextStep ? [`Next: ${content.nextStep}`] : []),
+    ];
+  }
+
+  return [
+    `Phase ${content.progress.phaseIndex}/${content.progress.phaseCount} · ${content.progress.title}`,
+    `✓ ${content.progress.completed}/${content.progress.total} tasks${content.nextStep ? ` · Next: ${content.nextStep}` : ""}`,
+  ];
 }

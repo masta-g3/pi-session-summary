@@ -23,7 +23,7 @@ Core experience:
 2. Run a Pi session normally.
 3. The extension optionally reads compact repo workflow context from `agent-work/features.yaml` and feature plan checklists when present.
 4. The extension asynchronously summarizes recent agent activity with a configured fast model.
-5. The user sees a compact status widget above the editor.
+5. The user sees deterministic phase progress for active plans, or semantic status when no phased plan is available.
 6. When running under Pi Agent Hub, the extension writes latest-only structured metadata for dashboard display.
 7. When `PI_SESSION_SUMMARY_METADATA_HISTORY=1` is set, successful derivations are also appended as JSONL for debugging.
 
@@ -49,9 +49,10 @@ flowchart TD
   Extension --> Activity[Activity buffer]
   Activity --> Scheduler[One-in-flight summarizer]
   Workflow[Optional agent-work context] --> Scheduler
+  Workflow --> Widget[In-session plan/status widget]
   Scheduler --> Model[Fast metadata model]
   Model --> Publish[Sanitize and publish]
-  Publish --> Widget[In-session status widget]
+  Publish --> Widget
   Publish --> State[Latest metadata JSON]
   Publish --> History[Debug metadata JSONL]
   State --> Hub[Future Pi Agent Hub reader]
@@ -79,7 +80,7 @@ pi-session-summary/
     metadata-log.ts            # opt-in debug JSONL derivation history writer
     metadata-quality.ts        # JSONL metadata quality scorecard and CLI
     text.ts                    # sanitization, truncation, JSON parsing helpers
-    widget.ts                  # width-safe status widget rendering
+    widget.ts                  # width-safe plan/status widget rendering
   test/
     *.test.ts                  # unit tests for runtime modules
 ```
@@ -98,7 +99,7 @@ src/
   metadata-log.ts   # opt-in debug metadata history path and JSONL appends
   metadata-quality.ts # metadata history parser, scorecard, and CLI
   text.ts           # sanitization, truncation, metadata JSON parsing helpers
-  widget.ts         # width-safe status widget and no-model warning rendering
+  widget.ts         # width-safe plan/status widget and no-model warning rendering
 ```
 
 `/session-summary` is the command for status, enable/disable, refresh, and naming actions.
@@ -114,7 +115,7 @@ src/
 5. At most one model request is in flight.
 6. The model returns JSON with `goal`, `status`, `nextStep`, `stage`, and `confidence`.
 7. Text helpers sanitize and validate the response.
-8. The widget updates in the Pi session with only the latest `status`.
+8. The widget displays repo-derived phase progress when available; otherwise it displays semantic status and an evidenced next step.
 9. If Agent Hub env vars exist, latest-only JSON is atomically written for the session.
 10. If `PI_SESSION_SUMMARY_METADATA_HISTORY=1` and Hub env vars exist, the successful derivation is appended to debug JSONL history.
 11. If the session is unnamed, workflow tickets get a deterministic `ticket-id: abbreviated objective` name; otherwise the first user prompt can generate a short session name with the same model path.
@@ -127,8 +128,8 @@ Product-level metadata:
 | --- | --- | --- |
 | Session name | Pi/Hub native session name | Deterministic `ticket-id: abbreviated objective` for workflow tickets, otherwise generated from the first prompt or `/session-summary name`; not written to Hub metadata. |
 | Goal | `goal` | Stable user-facing session or ticket objective. |
-| Status | `status` | Concise latest verified progress achieved by the main agent in context of the goal; this is the only in-session widget content. |
-| Next step | `nextStep` | Short explicit planned action or need toward the goal, when evidenced. |
+| Status | `status` | Concise latest verified progress achieved by the main agent in context of the goal; shown in-session when phased plan progress is unavailable. |
+| Next step | `nextStep` | Short explicit planned action or need toward the goal, when evidenced; shown with semantic status when available. |
 | Stage | `stage` | Current mode: `reading`, `editing`, `testing`, `waiting`, `blocked`, or `complete`. |
 
 Activity facts are different: they are compact internal inputs captured from Pi events (`user`, `assistant`, `tool`, `result`, `final`, `error`) so the model can infer the semantic outputs. Activity facts stay bounded in memory and must not be written to structured output.
@@ -152,12 +153,14 @@ Activity facts are model input only. They must stay bounded and must never be wr
 
 ### Optional Workflow Context
 
-Workflow context is an optional grounding source, not a dependency. When recent activity contains an explicit ticket id, or clearly expresses workflow intent and exactly one feature is `in_progress`, the extension may read:
+Workflow context is an optional grounding source, not a dependency. A ticket can come from an explicit prompt, Pi's `set_workflow_ticket` tool, or clear workflow intent when exactly one feature is `in_progress`. The extension may then read:
 
 - `agent-work/features.yaml` for `id`, `description`, `status`, and `plan_file`
 - the referenced Markdown plan for checked/unchecked checklist items
 
-The reader returns only compact evidence: ticket id, description, latest checked todo, and next unchecked todo. Checked todos are context for the model, not automatic `status`; recent activity must support that the main agent just completed or verified that milestone. Unchecked todos are strong evidence for `nextStep`. Missing, ambiguous, or absent workflow files simply produce no context.
+The reader returns only compact evidence: ticket id, description, latest checked todo, next unchecked todo, and current progress for Markdown headings shaped like `Phase <number>: <title>` or `Stage <number>: <title>`. It groups standard checkboxes beneath those headings and selects the first incomplete phase, or the final phase when all are complete. Flat checklists remain model context but do not produce phase progress. Checked todos are context for the model, not automatic semantic `status`; recent activity must support that milestone. Missing, ambiguous, or absent workflow files simply produce no context.
+
+This contract is repo-agnostic: resolution starts at the active repository's `agent-work/features.yaml`, follows its `plan_file`, and never reads a shared rules repository at runtime. The plan widget refreshes at turn start and after tool results, including when no summary model is authenticated.
 
 ### Session Name
 
@@ -285,7 +288,8 @@ Use TDD for implementation work:
 - Hub metadata path and atomic write tests
 - opt-in metadata history path, entry mapping, and JSONL append tests
 - metadata quality parser/grouping/scorecard tests
-- width-safe widget rendering tests
+- width-safe plan/status widget rendering tests
+- repo-local phased-plan parsing and refresh tests
 - representative prompt-evaluation artifacts under `agent-work/tickets/`
 
 ## Development Commands
@@ -301,7 +305,7 @@ pi -e ./src/index.ts
 
 ## Future Pi Agent Hub Integration
 
-Agent Hub should remain the consumer, not the metadata generator. The Pi extension renders only status in-session; dashboard integrations should consume the structured metadata file for high-level session management. Future work can read the metadata file during dashboard refresh and display:
+Agent Hub should remain the consumer, not the metadata generator. The Pi extension renders phased plan progress in-session when available and semantic status otherwise; dashboard integrations should consume the structured metadata file for high-level session management. Future work can read the metadata file during dashboard refresh and display:
 
 - session name as the main row title
 - goal in details or expanded row context

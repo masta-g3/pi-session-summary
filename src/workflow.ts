@@ -8,12 +8,21 @@ export interface WorkflowContextRequest {
   workflowIntent?: boolean;
 }
 
+export interface PlanProgress {
+  phaseIndex: number;
+  phaseCount: number;
+  title: string;
+  completed: number;
+  total: number;
+}
+
 export interface WorkflowContext {
   ticketId?: string;
   description?: string;
   planFile?: string;
   latestCompletedTodo?: string;
   nextOpenTodo?: string;
+  planProgress?: PlanProgress;
   evidence?: "explicit-ticket" | "single-in-progress";
 }
 
@@ -29,6 +38,7 @@ const TICKET_PATTERN = /\b([a-z][a-z0-9_]*-\d{3,})\b/i;
 const WORKFLOW_INTENT_PATTERN = /\b(execute|review|reflect|commit|next[-\s]?feature|plan[-\s]?md|prime|workflow ticket)\b|\b(?:continue|resume)\b.{0,32}\b(?:active\s+)?(?:plan|ticket|workflow|feature)\b/i;
 const MAX_DESCRIPTION_CHARS = 120;
 const MAX_TODO_CHARS = 120;
+const MAX_PHASE_TITLE_CHARS = 80;
 const MAX_PLAN_FILE_CHARS = 160;
 const MAX_SESSION_NAME_CHARS = 80;
 const MAX_SESSION_SUFFIX_CHARS = 48;
@@ -62,6 +72,7 @@ export async function readWorkflowContext(request: WorkflowContextRequest): Prom
     ...(feature.planFile ? { planFile: sanitizeText(feature.planFile, MAX_PLAN_FILE_CHARS) } : {}),
     ...(checklist?.latestCompletedTodo ? { latestCompletedTodo: checklist.latestCompletedTodo } : {}),
     ...(checklist?.nextOpenTodo ? { nextOpenTodo: checklist.nextOpenTodo } : {}),
+    ...(checklist?.planProgress ? { planProgress: checklist.planProgress } : {}),
     evidence: explicitTicket ? "explicit-ticket" : "single-in-progress",
   };
 }
@@ -74,6 +85,8 @@ export function formatWorkflowContext(context: WorkflowContext | undefined): str
     context.planFile ? `planFile: ${context.planFile}` : undefined,
     context.latestCompletedTodo ? `latestCompletedTodo: ${context.latestCompletedTodo}` : undefined,
     context.nextOpenTodo ? `nextOpenTodo: ${context.nextOpenTodo}` : undefined,
+    context.planProgress ? `planPhase: ${context.planProgress.phaseIndex}/${context.planProgress.phaseCount} ${context.planProgress.title}` : undefined,
+    context.planProgress ? `phaseProgress: ${context.planProgress.completed}/${context.planProgress.total}` : undefined,
   ].filter(Boolean).join("\n") || "none";
 }
 
@@ -125,7 +138,22 @@ function singleInProgress(features: readonly WorkflowFeature[]): WorkflowFeature
   return active.length === 1 ? active[0] : undefined;
 }
 
-async function readPlanChecklist(cwd: string, planFile: string): Promise<{ latestCompletedTodo?: string; nextOpenTodo?: string } | undefined> {
+interface ChecklistItem {
+  done: boolean;
+  text: string;
+}
+
+interface PlanPhase {
+  headingLevel: number;
+  title: string;
+  items: ChecklistItem[];
+}
+
+async function readPlanChecklist(cwd: string, planFile: string): Promise<{
+  latestCompletedTodo?: string;
+  nextOpenTodo?: string;
+  planProgress?: PlanProgress;
+} | undefined> {
   const path = safeProjectPath(cwd, planFile);
   if (!path) return undefined;
 
@@ -137,19 +165,77 @@ async function readPlanChecklist(cwd: string, planFile: string): Promise<{ lates
     throw error;
   }
 
-  const items = text.split(/\r?\n/).flatMap((line) => {
+  const allItems: ChecklistItem[] = [];
+  const phases: PlanPhase[] = [];
+  let activePhase: PlanPhase | undefined;
+  let openFence: { marker: "`" | "~"; length: number } | undefined;
+
+  for (const line of text.split(/\r?\n/)) {
+    const fence = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
+    const delimiter = fence?.[1];
+    const marker = delimiter?.startsWith("`") ? "`" : delimiter ? "~" : undefined;
+    if (openFence) {
+      const closesFence = marker === openFence.marker
+        && (delimiter?.length ?? 0) >= openFence.length
+        && !(fence?.[2] ?? "").trim();
+      if (closesFence) openFence = undefined;
+      continue;
+    }
+    if (marker && delimiter) {
+      openFence = { marker, length: delimiter.length };
+      continue;
+    }
+
+    const heading = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+    if (heading) {
+      const title = phaseTitle(heading[2] ?? "");
+      if (title) {
+        activePhase = { headingLevel: heading[1]?.length ?? 1, title, items: [] };
+        phases.push(activePhase);
+      } else if (activePhase && (heading[1]?.length ?? 1) <= activePhase.headingLevel) {
+        activePhase = undefined;
+      }
+      continue;
+    }
+
     const match = /^\s*-\s+\[([ xX])]\s+(.+?)\s*$/.exec(line);
-    if (!match) return [];
-    return [{ done: match[1]?.toLowerCase() === "x", text: sanitizeText(match[2] ?? "", MAX_TODO_CHARS) }];
-  });
+    if (!match) continue;
+    const item = { done: match[1]?.toLowerCase() === "x", text: sanitizeText(match[2] ?? "", MAX_TODO_CHARS) };
+    allItems.push(item);
+    activePhase?.items.push(item);
+  }
+
+  const populatedPhases = phases.filter((phase) => phase.items.length > 0);
+  const phaseItems = populatedPhases.flatMap((phase) => phase.items);
+  const items = phaseItems.length ? phaseItems : allItems;
   const latestDoneIndex = findLastIndex(items, (item) => item.done);
-  const nextOpenTodo = items.slice(Math.max(0, latestDoneIndex + 1)).find((item) => !item.done)?.text
-    ?? items.find((item) => !item.done)?.text;
   const latestCompletedTodo = latestDoneIndex >= 0 ? items[latestDoneIndex]?.text : undefined;
+  const nextOpenTodo = phaseItems.length
+    ? items.find((item) => !item.done)?.text
+    : items.slice(Math.max(0, latestDoneIndex + 1)).find((item) => !item.done)?.text
+      ?? items.find((item) => !item.done)?.text;
+  const currentPhaseIndex = populatedPhases.findIndex((phase) => phase.items.some((item) => !item.done));
+  const selectedPhaseIndex = currentPhaseIndex >= 0 ? currentPhaseIndex : populatedPhases.length - 1;
+  const selectedPhase = populatedPhases[selectedPhaseIndex];
+  const planProgress = selectedPhase ? {
+    phaseIndex: selectedPhaseIndex + 1,
+    phaseCount: populatedPhases.length,
+    title: selectedPhase.title,
+    completed: selectedPhase.items.filter((item) => item.done).length,
+    total: selectedPhase.items.length,
+  } satisfies PlanProgress : undefined;
+
   return {
     ...(latestCompletedTodo ? { latestCompletedTodo } : {}),
     ...(nextOpenTodo ? { nextOpenTodo } : {}),
+    ...(planProgress ? { planProgress } : {}),
   };
+}
+
+function phaseTitle(heading: string): string | undefined {
+  const match = /^(?:phase|stage)\s+\d+\s*(?::|[-–—])\s*(.+)$/i.exec(heading.trim());
+  const title = sanitizeText(match?.[1] ?? "", MAX_PHASE_TITLE_CHARS);
+  return title || undefined;
 }
 
 function safeProjectPath(cwd: string, path: string): string | undefined {

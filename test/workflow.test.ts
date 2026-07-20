@@ -76,6 +76,131 @@ test("does not guess among multiple in-progress tickets", async () => {
   assert.equal(await readWorkflowContext({ cwd: dir, workflowIntent: true }), undefined);
 });
 
+test("reads current progress from phased plan checklists", async () => {
+  const dir = await workflowRepo(`
+- id: metadata-002
+  status: in_progress
+  description: "Workflow metadata"
+  plan_file: agent-work/plans/metadata-002.md
+`, `
+## Implementation Phases
+
+### Phase 1: Define the contract
+
+- [x] Confirm the display fields
+- [x] Define parser behavior
+
+### Phase 2: Add plan display
+
+- [x] Add parser tests
+- [ ] Parse phase progress
+- [ ] Render the plan widget
+- [ ] Refresh after tool results
+
+### Phase 3: Verify behavior
+
+- [ ] Run the full test suite
+`);
+
+  const context = await readWorkflowContext({ cwd: dir, ticketId: "metadata-002" });
+  assert.deepEqual(context?.planProgress, {
+    phaseIndex: 2,
+    phaseCount: 3,
+    title: "Add plan display",
+    completed: 1,
+    total: 4,
+  });
+  assert.equal(context?.latestCompletedTodo, "Add parser tests");
+  assert.equal(context?.nextOpenTodo, "Parse phase progress");
+});
+
+test("ignores phase examples inside fenced code blocks", async () => {
+  const dir = await workflowRepo(`
+- id: metadata-002
+  status: in_progress
+  description: "Workflow metadata"
+  plan_file: agent-work/plans/metadata-002.md
+`, `
+\`\`\`\`md
+\`\`\`md
+### Phase 1: Example only
+- [ ] Do not count this
+\`\`\`
+\`\`\`\`
+
+### Phase 1: Implement
+- [x] Add parser
+
+### Phase 2: Verify
+- [ ] Run tests
+`);
+
+  const context = await readWorkflowContext({ cwd: dir, ticketId: "metadata-002" });
+  assert.deepEqual(context?.planProgress, {
+    phaseIndex: 2,
+    phaseCount: 2,
+    title: "Verify",
+    completed: 0,
+    total: 1,
+  });
+  assert.equal(context?.nextOpenTodo, "Run tests");
+});
+
+test("accepts generic Stage headings and ignores checklists outside staged work", async () => {
+  const dir = await workflowRepo(`
+- id: metadata-002
+  status: in_progress
+  description: "Workflow metadata"
+  plan_file: agent-work/plans/metadata-002.md
+`, `
+## Context checklist
+- [ ] Optional background reading
+
+### Stage 1 — Build
+- [x] Implement parser
+
+### Stage 2 — Validate
+- [ ] Run integration checks
+`);
+
+  const context = await readWorkflowContext({ cwd: dir, ticketId: "metadata-002" });
+  assert.deepEqual(context?.planProgress, {
+    phaseIndex: 2,
+    phaseCount: 2,
+    title: "Validate",
+    completed: 0,
+    total: 1,
+  });
+  assert.equal(context?.latestCompletedTodo, "Implement parser");
+  assert.equal(context?.nextOpenTodo, "Run integration checks");
+});
+
+test("reports the final phase when every phased task is complete", async () => {
+  const dir = await workflowRepo(`
+- id: metadata-002
+  status: in_progress
+  description: "Workflow metadata"
+  plan_file: agent-work/plans/metadata-002.md
+`, `
+### Phase 1: Implement
+- [x] Add parser
+
+### Phase 2: Verify
+- [x] Run tests
+- [x] Check package
+`);
+
+  const context = await readWorkflowContext({ cwd: dir, ticketId: "metadata-002" });
+  assert.deepEqual(context?.planProgress, {
+    phaseIndex: 2,
+    phaseCount: 2,
+    title: "Verify",
+    completed: 2,
+    total: 2,
+  });
+  assert.equal(context?.nextOpenTodo, undefined);
+});
+
 test("uses first unchecked plan item when nothing is checked", async () => {
   const dir = await workflowRepo(`
 - id: metadata-002

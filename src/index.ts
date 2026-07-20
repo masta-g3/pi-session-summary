@@ -33,6 +33,8 @@ interface RuntimeState {
   latestSessionName: string | undefined;
   latestTicketId: string | undefined;
   latestWorkflowIntent: boolean;
+  latestWorkflowContext: WorkflowContext | undefined;
+  workflowContextRequest: number;
   writeChain: Promise<void>;
   logChain: Promise<void>;
   userTurn: number;
@@ -61,6 +63,8 @@ export default function sessionSummary(pi: ExtensionAPI) {
     latestSessionName: undefined,
     latestTicketId: undefined,
     latestWorkflowIntent: false,
+    latestWorkflowContext: undefined,
+    workflowContextRequest: 0,
     writeChain: Promise.resolve(),
     logChain: Promise.resolve(),
     userTurn: 0,
@@ -85,6 +89,8 @@ export default function sessionSummary(pi: ExtensionAPI) {
     state.latestSessionName = pi.getSessionName() || undefined;
     state.latestTicketId = undefined;
     state.latestWorkflowIntent = false;
+    state.latestWorkflowContext = undefined;
+    state.workflowContextRequest += 1;
     state.latestMetadata = undefined;
     state.userTurn = 0;
     state.finalFlushState = undefined;
@@ -105,6 +111,7 @@ export default function sessionSummary(pi: ExtensionAPI) {
     state.latestWorkflowIntent = Boolean(promptTicketId) || promptWorkflowIntent;
     state.activity.record("user", prompt);
     clearSessionSummaryWidget(ctx);
+    void refreshPlanWidget(ctx, state, false);
     state.summarizer?.schedule("initial", "running");
     void attemptAutoName(pi, ctx, state, promptText);
   });
@@ -117,13 +124,16 @@ export default function sessionSummary(pi: ExtensionAPI) {
 
   pi.on("tool_execution_start", (event, _ctx) => {
     if (!state.sessionActive || !state.enabled) return;
-    state.activity.record("tool", compactToolEvent(event as ToolEvent, "started"));
+    const toolEvent = event as ToolEvent;
+    trackWorkflowTicket(toolEvent, state);
+    state.activity.record("tool", compactToolEvent(toolEvent, "started"));
     state.summarizer?.schedule("normal", "running");
   });
 
-  pi.on("tool_execution_end", (event, _ctx) => {
+  pi.on("tool_execution_end", (event, ctx) => {
     if (!state.sessionActive || !state.enabled) return;
     state.activity.record("result", compactToolEvent(event as ToolEvent, "finished"));
+    void refreshPlanWidget(ctx, state, true);
     state.summarizer?.schedule("normal", "running");
   });
 
@@ -157,6 +167,8 @@ export default function sessionSummary(pi: ExtensionAPI) {
     state.latestMetadata = undefined;
     state.latestTicketId = undefined;
     state.latestWorkflowIntent = false;
+    state.latestWorkflowContext = undefined;
+    state.workflowContextRequest += 1;
     state.metadataLogPath = undefined;
     state.metadataLogSessionId = undefined;
     state.userTurn = 0;
@@ -177,6 +189,8 @@ function registerCommand(pi: ExtensionAPI, state: RuntimeState): void {
     if (action === "off") {
       state.enabled = false;
       state.latestMetadata = undefined;
+      state.latestWorkflowContext = undefined;
+      state.workflowContextRequest += 1;
       state.summarizer?.setEnabled(false);
       clearSessionSummaryWidget(ctx);
       clearNoModelWarning(ctx);
@@ -232,7 +246,7 @@ function createSummarizer(ctx: ExtensionContext, state: RuntimeState): SessionSu
         ...(metadata.confidence !== undefined ? { confidence: metadata.confidence } : {}),
       };
       state.activeModel = metadata.model;
-      showSessionSummaryWidget(ctx, metadata.status, metadata.stage);
+      showLatestWidget(ctx, state);
       logMetadataDerivation(state, metadata);
     },
     publishState: (partial) => publishMetadata(ctx, state, partial),
@@ -251,14 +265,55 @@ function logMetadataDerivation(state: RuntimeState, metadata: SessionMetadataUpd
   );
 }
 
-async function refreshWorkflowContext(ctx: ExtensionContext, state: RuntimeState): Promise<WorkflowContext | undefined> {
+async function refreshWorkflowContext(
+  ctx: ExtensionContext,
+  state: RuntimeState,
+  options: { semanticFallback?: boolean } = {},
+): Promise<WorkflowContext | undefined> {
+  const request = ++state.workflowContextRequest;
   const context = await readWorkflowContext({
     cwd: ctx.cwd,
     ...(state.latestTicketId ? { ticketId: state.latestTicketId } : {}),
     workflowIntent: state.latestWorkflowIntent,
   });
+  if (!state.sessionActive || request !== state.workflowContextRequest) return undefined;
   if (context?.ticketId) state.latestTicketId = context.ticketId;
+  state.latestWorkflowContext = context;
+  if (context?.planProgress || options.semanticFallback) showLatestWidget(ctx, state);
   return context;
+}
+
+async function refreshPlanWidget(ctx: ExtensionContext, state: RuntimeState, semanticFallback: boolean): Promise<void> {
+  try {
+    await refreshWorkflowContext(ctx, state, { semanticFallback });
+  } catch {
+    // Workflow context is optional; semantic metadata remains the fallback.
+  }
+}
+
+function showLatestWidget(ctx: ExtensionContext, state: RuntimeState): void {
+  const context = state.latestWorkflowContext;
+  if (context?.planProgress) {
+    showSessionSummaryWidget(ctx, {
+      kind: "plan",
+      progress: context.planProgress,
+      ...(context.nextOpenTodo ? { nextStep: context.nextOpenTodo } : {}),
+    });
+    return;
+  }
+
+  const metadata = state.latestMetadata;
+  if (metadata) {
+    showSessionSummaryWidget(ctx, {
+      kind: "status",
+      status: metadata.status,
+      stage: metadata.stage,
+      ...(metadata.nextStep ? { nextStep: metadata.nextStep } : {}),
+    });
+    return;
+  }
+
+  clearSessionSummaryWidget(ctx);
 }
 
 async function readOptionalWorkflowContext(ctx: ExtensionContext, state: RuntimeState): Promise<WorkflowContext | undefined> {
@@ -387,6 +442,14 @@ function assistantUpdateText(event: MessageUpdateEvent): unknown {
   const accumulatedText = messageContentText(event.message);
   if (accumulatedText) return accumulatedText;
   return event.assistantMessageEvent?.type === "text_delta" ? event.assistantMessageEvent.delta : undefined;
+}
+
+function trackWorkflowTicket(event: ToolEvent, state: RuntimeState): void {
+  if ((event.name ?? event.toolName) !== "set_workflow_ticket") return;
+  const ticketId = extractTicketId(event.args ?? event.input);
+  if (!ticketId) return;
+  state.latestTicketId = ticketId;
+  state.latestWorkflowIntent = true;
 }
 
 function compactToolEvent(event: ToolEvent, status: string): string {

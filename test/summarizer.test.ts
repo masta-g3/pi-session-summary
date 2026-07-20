@@ -212,6 +212,13 @@ test("includes workflow context in prompt at request time", async () => {
         planFile: "agent-work/plans/metadata-002.md",
         latestCompletedTodo: "Implement workflow context reader",
         nextOpenTodo: "Wire context into summarizer prompt",
+        planProgress: {
+          phaseIndex: 2,
+          phaseCount: 4,
+          title: "Integrate workflow context",
+          completed: 1,
+          total: 3,
+        },
         evidence: "explicit-ticket",
       };
     },
@@ -230,6 +237,8 @@ test("includes workflow context in prompt at request time", async () => {
   assert.match(prompts[0] ?? "", /Workflow context from repo files, if explicit:/);
   assert.match(prompts[0] ?? "", /ticket: metadata-002/);
   assert.match(prompts[0] ?? "", /nextOpenTodo: Wire context into summarizer prompt/);
+  assert.match(prompts[0] ?? "", /planPhase: 2\/4 Integrate workflow context/);
+  assert.match(prompts[0] ?? "", /phaseProgress: 1\/3/);
 });
 
 test("formats absent workflow context as none", async () => {

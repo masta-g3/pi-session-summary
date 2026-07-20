@@ -2,13 +2,13 @@
 
 Semantic session metadata and naming for Pi coding-agent sessions.
 
-`pi-session-summary` is a Pi extension package that uses a fast LLM to infer what an agent session is trying to accomplish, what changed most recently, and what should happen next. It renders a compact in-session status and exports latest-only structured metadata for Pi Agent Hub or dashboard views.
+`pi-session-summary` is a Pi extension package that uses a fast LLM to infer what an agent session is trying to accomplish, what changed most recently, and what should happen next. It renders compact in-session progress and exports latest-only structured metadata for Pi Agent Hub or dashboard views.
 
-When a repo uses Pi's lightweight `agent-work/` workflow files, the extension also uses that context to ground ticket dashboards: session names can become `ticket-id: abbreviated objective`, `goal` uses the tracked ticket objective, and `nextStep` prefers the next explicit unchecked plan item. This remains optional; the extension works normally without workflow files.
+When a repo uses Pi's lightweight `agent-work/` workflow files, the extension also uses that context to ground ticket dashboards and show deterministic plan progress: session names can become `ticket-id: abbreviated objective`, `goal` uses the tracked ticket objective, and `nextStep` prefers the next explicit unchecked plan item. This remains optional; the extension works normally without workflow files.
 
 ## Main elements
 
-The extension produces dashboard-oriented semantic metadata:
+The extension produces dashboard-oriented semantic metadata and optional in-session plan progress:
 
 | Element | Purpose |
 | --- | --- |
@@ -17,12 +17,27 @@ The extension produces dashboard-oriented semantic metadata:
 | Status | Terse latest verified progress achieved by the main agent. |
 | Next step | Short explicit planned action or need, when evidenced. |
 | Stage | Current mode: `reading`, `editing`, `testing`, `waiting`, `blocked`, or `complete`. |
+| Plan progress | Current Markdown phase, completed task count, and next unchecked task when available. |
 
-The in-session UI intentionally shows only the **status** widget above the editor. The fuller semantic set exists for session-management dashboards or Agent Hub views where many sessions need compact goal, status, stage, and next-step display.
+For an active phased plan, the in-session widget shows deterministic phase progress and the next unchecked task:
+
+```text
+Phase 2/4 · Add skill skeleton
+✓ 1/4 tasks · Next: Create routing.md
+```
+
+Without one, it falls back to semantic status plus an evidenced next step when available:
+
+```text
+EDITING · Updating workflow parser
+Next: Add phase parsing tests
+```
+
+The fuller semantic set also exists for session-management dashboards or Agent Hub views.
 
 Internally, the extension captures bounded activity facts such as user prompts, assistant text, tool starts/results, final messages, and errors. Those activity facts are inputs for the model only; they are not the product output and are not written to Agent Hub state.
 
-If `agent-work/features.yaml` and a feature `plan_file` are present, the extension reads only compact workflow evidence: ticket id, description, latest checked checklist item, and next unchecked checklist item. It does not mutate workflow files, does not require Hub, and does not write raw plan contents to metadata.
+If `agent-work/features.yaml` and a feature `plan_file` are present, the extension reads only compact workflow evidence: ticket id, description, latest checked item, next unchecked item, and progress for numbered `Phase` or `Stage` headings. It follows the repo-local `plan_file`; it has no dependency on a particular rules repository. Flat checklists remain valid model context but do not produce a phase-progress widget. The extension does not mutate workflow files, require Hub, or write raw plan contents to metadata.
 
 ## Requirements
 
