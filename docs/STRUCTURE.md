@@ -24,8 +24,9 @@ Core experience:
 3. The extension optionally reads compact repo workflow context from `agent-work/features.yaml` and feature plan checklists when present.
 4. The extension asynchronously summarizes recent agent activity with a configured fast model.
 5. The user sees deterministic phase progress for active plans, or semantic status when no phased plan is available.
-6. When running under Pi Agent Hub, the extension writes latest-only structured metadata for dashboard display.
-7. When `PI_SESSION_SUMMARY_METADATA_HISTORY=1` is set, successful derivations are also appended as JSONL for debugging.
+6. On request, a focused read-only drawer shows the active plan's complete executable checklist without exposing it to the model.
+7. When running under Pi Agent Hub, the extension writes latest-only structured metadata for dashboard display.
+8. When `PI_SESSION_SUMMARY_METADATA_HISTORY=1` is set, successful derivations are also appended as JSONL for debugging.
 
 ## Tech Stack
 
@@ -48,8 +49,12 @@ flowchart TD
   Session[Pi session] --> Extension[pi-session-summary extension]
   Extension --> Activity[Activity buffer]
   Activity --> Scheduler[One-in-flight summarizer]
-  Workflow[Optional agent-work context] --> Scheduler
-  Workflow --> Widget[In-session plan/status widget]
+  Workflow[Optional agent-work files] --> Snapshot[Workflow snapshot]
+  Snapshot --> Compact[Compact context]
+  Snapshot --> Plan[Full local plan]
+  Compact --> Scheduler
+  Compact --> Widget[In-session plan/status widget]
+  Plan --> Drawer[Focused todo drawer]
   Scheduler --> Model[Fast metadata model]
   Model --> Publish[Sanitize and publish]
   Publish --> Widget
@@ -75,7 +80,8 @@ pi-session-summary/
     summarizer.ts              # throttled model-call scheduler and prompt builder
     models.ts                  # sessionSummary.model setting and auth/model resolution
     naming.ts                  # minimal AI session naming helpers
-    workflow.ts                # optional workflow-ticket context reader
+    workflow.ts                # compact workflow context and full local plan snapshot
+    todo-panel.ts              # focused width-safe plan todo overlay
     state-output.ts            # atomic Hub metadata writer
     metadata-log.ts            # opt-in debug JSONL derivation history writer
     metadata-quality.ts        # JSONL metadata quality scorecard and CLI
@@ -94,7 +100,8 @@ src/
   summarizer.ts     # one-in-flight LLM scheduler and semantic prompt builder
   models.ts         # model preference parsing and auth/model resolution
   naming.ts         # first-prompt/history extraction and session-name generation
-  workflow.ts       # optional agent-work feature/plan checklist context
+  workflow.ts       # optional compact workflow context and full local plan snapshot
+  todo-panel.ts     # focused read-only plan drawer, wrapping, scrolling, and close controls
   state-output.ts   # Agent Hub metadata path and atomic latest-only JSON writes
   metadata-log.ts   # opt-in debug metadata history path and JSONL appends
   metadata-quality.ts # metadata history parser, scorecard, and CLI
@@ -102,7 +109,7 @@ src/
   widget.ts         # width-safe plan/status widget and no-model warning rendering
 ```
 
-`/session-summary` is the command for status, enable/disable, refresh, and naming actions.
+`/session-summary` is the command for status, enable/disable, refresh, naming, and the `todos` drawer action. `Ctrl+Alt+T` toggles the same drawer in the TUI.
 
 `sessionSummary.model` is the only model setting read by this package. If absent or unauthenticated, the extension tries fast Codex-first defaults.
 
@@ -110,15 +117,16 @@ src/
 
 1. Pi emits lifecycle/activity events.
 2. `index.ts` normalizes events into compact facts and stores them in the activity buffer.
-3. When workflow intent or an explicit ticket id is present, `workflow.ts` reads compact optional ticket context from repo-local `agent-work/` files.
-4. The summarizer schedules work with debounce/rate-limit guards.
-5. At most one model request is in flight.
-6. The model returns JSON with `goal`, `status`, `nextStep`, `stage`, and `confidence`.
-7. Text helpers sanitize and validate the response.
-8. The widget displays repo-derived phase progress when available; otherwise it displays semantic status and an evidenced next step.
-9. If Agent Hub env vars exist, latest-only JSON is atomically written for the session.
-10. If `PI_SESSION_SUMMARY_METADATA_HISTORY=1` and Hub env vars exist, the successful derivation is appended to debug JSONL history.
-11. If the session is unnamed, workflow tickets get a deterministic `ticket-id: abbreviated objective` name; otherwise the first user prompt can generate a short session name with the same model path.
+3. When workflow intent or an explicit ticket id is present, `workflow.ts` reads repo-local `agent-work/` files once and derives a `WorkflowSnapshot` containing compact context plus an optional full local plan.
+4. `index.ts` sends only the compact projection to the summarizer and compact widget. An explicit todo toggle performs a separately guarded fresh read and passes only the full plan projection to `todo-panel.ts`.
+5. The summarizer schedules work with debounce/rate-limit guards.
+6. At most one model request is in flight.
+7. The model returns JSON with `goal`, `status`, `nextStep`, `stage`, and `confidence`.
+8. Text helpers sanitize and validate the response.
+9. The widget displays repo-derived phase progress when available; otherwise it displays semantic status and an evidenced next step.
+10. If Agent Hub env vars exist, latest-only JSON is atomically written for the session.
+11. If `PI_SESSION_SUMMARY_METADATA_HISTORY=1` and Hub env vars exist, the successful derivation is appended to debug JSONL history.
+12. If the session is unnamed, workflow tickets get a deterministic `ticket-id: abbreviated objective` name; otherwise the first user prompt can generate a short session name with the same model path.
 
 ## Semantic Outputs vs Activity Inputs
 
@@ -158,9 +166,14 @@ Workflow context is an optional grounding source, not a dependency. A ticket can
 - `agent-work/features.yaml` for `id`, `description`, `status`, and `plan_file`
 - the referenced Markdown plan for checked/unchecked checklist items
 
-The reader returns only compact evidence: ticket id, description, latest checked todo, next unchecked todo, and current progress for Markdown headings shaped like `Phase <number>: <title>` or `Stage <number>: <title>`. It groups standard checkboxes beneath those headings and selects the first incomplete phase, or the final phase when all are complete. Flat checklists remain model context but do not produce phase progress. Checked todos are context for the model, not automatic semantic `status`; recent activity must support that milestone. Missing, ambiguous, or absent workflow files simply produce no context.
+The reader returns a `WorkflowSnapshot` with two deliberately separate projections:
 
-This contract is repo-agnostic: resolution starts at the active repository's `agent-work/features.yaml`, follows its `plan_file`, and never reads a shared rules repository at runtime. The plan widget refreshes at turn start and after tool results, including when no summary model is authenticated.
+- `WorkflowContext` contains only ticket id, description, latest checked todo, next unchecked todo, and current progress for Markdown headings shaped like `Phase <number>: <title>` or `Stage <number>: <title>`. This compact projection is the only workflow data available to the summary model, naming, and compact widget.
+- `WorkflowPlan` contains sanitized section headings and every executable task for the local drawer. When populated numbered phases/stages exist, it excludes checkboxes outside those sections and preserves source kind/number labels such as `Stage 3`. Otherwise, one untitled section contains all flat checklist items.
+
+The parser selects the first incomplete phase for compact progress, or the final phase when all are complete. Flat checklists remain compact next-step context but do not produce phase progress. Checked todos are context for the model, not automatic semantic `status`; recent activity must support that milestone. Missing, ambiguous, or absent workflow files produce no plan context.
+
+This contract is repo-agnostic: resolution starts at the active repository's `agent-work/features.yaml`, follows its `plan_file`, and never reads a shared rules repository at runtime. Lifecycle refreshes atomically cache both projections under the existing latest-request generation guard. Todo openings use an independent panel token/session/ticket guard so a concurrent summarizer refresh cannot cancel an explicit toggle or open stale cached tasks.
 
 ### Session Name
 
@@ -240,6 +253,12 @@ Each JSONL entry includes `source`, raw Hub `sessionId`, `generatedAt`, `activit
 
 `src/index.ts` should remain a thin adapter around pure modules. Pi lifecycle handlers should enqueue work and return quickly.
 
+### Focused todo overlay
+
+`src/todo-panel.ts` isolates Pi's experimental overlay API surface. The component renders through the injected `Theme`, wraps by visible terminal width, scrolls visual rows within 80% of terminal height, and closes through its `done()` callback. `/session-summary todos` and `Ctrl+Alt+T` perform a fresh repo read; `Esc` or the same shortcut closes the focused overlay. Visibility is runtime-only and starts closed on every session, reload, fork, disable, or shutdown.
+
+The drawer is display-only. It does not edit Markdown, watch files, persist visibility, add Hub fields, or place the full checklist in model prompts.
+
 ### One-in-flight scheduler
 
 Use one pending timer, one in-flight model request, and one dirty flag. Do not introduce a queue or accepted-checkpoint system.
@@ -289,7 +308,8 @@ Use TDD for implementation work:
 - opt-in metadata history path, entry mapping, and JSONL append tests
 - metadata quality parser/grouping/scorecard tests
 - width-safe plan/status widget rendering tests
-- repo-local phased-plan parsing and refresh tests
+- repo-local phased/flat plan snapshot parsing and refresh tests
+- focused todo overlay hierarchy, wrapping, scrolling, controls, and lifecycle tests
 - representative prompt-evaluation artifacts under `agent-work/tickets/`
 
 ## Development Commands

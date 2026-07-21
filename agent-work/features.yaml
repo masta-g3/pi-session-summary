@@ -59,3 +59,22 @@
   created_at: '2026-06-28'
   completed_at: '2026-06-28'
   plan_file: agent-work/history/20260628_metadata-004_metadata_quality.md
+- epic: metadata
+  description: Add a toggleable full-plan todo overlay
+  priority: 1
+  depends_on: []
+  id: metadata-005
+  status: done
+  created_at: '2026-07-19'
+  plan_file: agent-work/history/20260721_metadata-005_full_plan_todo.md
+  completed_at: '2026-07-21'
+- epic: metadata
+  description: Parse workflow feature IDs regardless of YAML field order
+  priority: 1
+  depends_on: []
+  discovered_from: metadata-005
+  id: metadata-006
+  status: done
+  created_at: '2026-07-20'
+  completed_at: '2026-07-20'
+  plan_file: agent-work/history/20260720_metadata-006_yaml_field_order.md

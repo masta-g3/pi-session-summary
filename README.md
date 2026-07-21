@@ -18,6 +18,7 @@ The extension produces dashboard-oriented semantic metadata and optional in-sess
 | Next step | Short explicit planned action or need, when evidenced. |
 | Stage | Current mode: `reading`, `editing`, `testing`, `waiting`, `blocked`, or `complete`. |
 | Plan progress | Current Markdown phase, completed task count, and next unchecked task when available. |
+| Plan todo drawer | On-demand read-only view of every executable task in the active repo-local plan. |
 
 For an active phased plan, the in-session widget shows deterministic phase progress and the next unchecked task:
 
@@ -33,11 +34,13 @@ EDITING · Updating workflow parser
 Next: Add phase parsing tests
 ```
 
+Run `/session-summary todos` or press `Ctrl+Alt+T` to open a focused right-side drawer containing the full active-plan checklist. Use `Up`/`Down` or `PageUp`/`PageDown` to scroll, then `Esc` or `Ctrl+Alt+T` to close it. The drawer is TUI-only, read-only, hidden by default, and never persisted. It uses Pi 0.78's experimental overlay API.
+
 The fuller semantic set also exists for session-management dashboards or Agent Hub views.
 
 Internally, the extension captures bounded activity facts such as user prompts, assistant text, tool starts/results, final messages, and errors. Those activity facts are inputs for the model only; they are not the product output and are not written to Agent Hub state.
 
-If `agent-work/features.yaml` and a feature `plan_file` are present, the extension reads only compact workflow evidence: ticket id, description, latest checked item, next unchecked item, and progress for numbered `Phase` or `Stage` headings. It follows the repo-local `plan_file`; it has no dependency on a particular rules repository. Flat checklists remain valid model context but do not produce a phase-progress widget. The extension does not mutate workflow files, require Hub, or write raw plan contents to metadata.
+If `agent-work/features.yaml` and a feature `plan_file` are present, the extension derives compact model evidence—ticket id, description, latest checked item, next unchecked item, and progress for numbered `Phase` or `Stage` headings—and a separate local TUI plan snapshot. The drawer shows all checkboxes under populated numbered phases/stages, excluding checkboxes outside those sections; legacy plans without numbered sections show all flat checklist items. It follows the repo-local `plan_file` and has no dependency on a particular rules repository. Flat checklists do not produce a phase-progress widget. The extension does not mutate workflow files, require Hub, send the full checklist to the model, or write raw plan contents to metadata.
 
 ## Requirements
 
@@ -66,7 +69,10 @@ pi -e ./src/index.ts
 /session-summary off
 /session-summary refresh
 /session-summary name
+/session-summary todos
 ```
+
+`Ctrl+Alt+T` toggles the same todo drawer while the TUI is active.
 
 ## Configuration
 

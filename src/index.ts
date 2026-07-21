@@ -6,8 +6,9 @@ import { generateSessionName, getConversationTranscript, getFirstUserMessageText
 import { createDefaultTimerScheduler, SessionSummarySummarizer, type HubMetadataUpdate, type SessionMetadataUpdate } from "./summarizer.js";
 import { HUB_SESSION_ID_ENV, sessionMetadataPath, writeSessionMetadata, type HubSessionMetadataFile } from "./state-output.js";
 import { compactUnknown, sanitizeText, type ParsedSessionMetadata } from "./text.js";
+import { TodoPanel, TODO_PANEL_OVERLAY_OPTIONS, TODO_PANEL_SHORTCUT } from "./todo-panel.js";
 import { clearNoModelWarning, clearSessionSummaryWidget, notifyUser, showNoModelWarning, showSessionSummaryWidget } from "./widget.js";
-import { extractTicketId, hasWorkflowIntent, readWorkflowContext, workflowSessionName, type WorkflowContext } from "./workflow.js";
+import { extractTicketId, hasWorkflowIntent, readWorkflowSnapshot, workflowSessionName, type WorkflowContext, type WorkflowPlan } from "./workflow.js";
 
 const EXTENSION_KEY = Symbol.for("pi-session-summary.extension.loaded");
 type SessionSummaryGlobal = typeof globalThis & { [EXTENSION_KEY]?: true };
@@ -34,7 +35,12 @@ interface RuntimeState {
   latestTicketId: string | undefined;
   latestWorkflowIntent: boolean;
   latestWorkflowContext: WorkflowContext | undefined;
+  latestWorkflowPlan: WorkflowPlan | undefined;
   workflowContextRequest: number;
+  todoPanelRequest: number;
+  todoPanelPending: number | undefined;
+  todoPanelSession: number;
+  closeTodoPanel: (() => void) | undefined;
   writeChain: Promise<void>;
   logChain: Promise<void>;
   userTurn: number;
@@ -64,7 +70,12 @@ export default function sessionSummary(pi: ExtensionAPI) {
     latestTicketId: undefined,
     latestWorkflowIntent: false,
     latestWorkflowContext: undefined,
+    latestWorkflowPlan: undefined,
     workflowContextRequest: 0,
+    todoPanelRequest: 0,
+    todoPanelPending: undefined,
+    todoPanelSession: 0,
+    closeTodoPanel: undefined,
     writeChain: Promise.resolve(),
     logChain: Promise.resolve(),
     userTurn: 0,
@@ -74,6 +85,8 @@ export default function sessionSummary(pi: ExtensionAPI) {
   registerCommand(pi, state);
 
   pi.on("session_start", (_event, ctx) => {
+    dismissTodoPanel(state);
+    state.todoPanelSession += 1;
     state.sessionActive = true;
     state.enabled = true;
     state.outputPath = sessionMetadataPath(process.env);
@@ -90,6 +103,7 @@ export default function sessionSummary(pi: ExtensionAPI) {
     state.latestTicketId = undefined;
     state.latestWorkflowIntent = false;
     state.latestWorkflowContext = undefined;
+    state.latestWorkflowPlan = undefined;
     state.workflowContextRequest += 1;
     state.latestMetadata = undefined;
     state.userTurn = 0;
@@ -156,6 +170,8 @@ export default function sessionSummary(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
+    dismissTodoPanel(state);
+    state.todoPanelSession += 1;
     if (state.finalFlushState) await state.summarizer?.flushPending(state.finalFlushState);
     const keepFinalMetadata = state.finalFlushState !== undefined && state.latestMetadata?.stage === state.finalFlushState;
     state.sessionActive = false;
@@ -168,6 +184,7 @@ export default function sessionSummary(pi: ExtensionAPI) {
     state.latestTicketId = undefined;
     state.latestWorkflowIntent = false;
     state.latestWorkflowContext = undefined;
+    state.latestWorkflowPlan = undefined;
     state.workflowContextRequest += 1;
     state.metadataLogPath = undefined;
     state.metadataLogSessionId = undefined;
@@ -186,10 +203,16 @@ function registerCommand(pi: ExtensionAPI, state: RuntimeState): void {
       await notifyStatus(ctx, state);
       return;
     }
+    if (action === "todos") {
+      await toggleTodoPanel(ctx, state);
+      return;
+    }
     if (action === "off") {
+      dismissTodoPanel(state);
       state.enabled = false;
       state.latestMetadata = undefined;
       state.latestWorkflowContext = undefined;
+      state.latestWorkflowPlan = undefined;
       state.workflowContextRequest += 1;
       state.summarizer?.setEnabled(false);
       clearSessionSummaryWidget(ctx);
@@ -215,13 +238,76 @@ function registerCommand(pi: ExtensionAPI, state: RuntimeState): void {
       await nameFromHistory(pi, ctx, state);
       return;
     }
-    notifyUser(ctx, "Use /session-summary [status|on|off|refresh|name]", "error");
+    notifyUser(ctx, "Use /session-summary [status|on|off|refresh|name|todos]", "error");
   };
 
   pi.registerCommand("session-summary", {
     description: "pi-session-summary status and controls",
     handler,
   });
+  pi.registerShortcut(TODO_PANEL_SHORTCUT, {
+    description: "Toggle active plan todos",
+    handler: async (ctx) => toggleTodoPanel(ctx, state),
+  });
+}
+
+async function toggleTodoPanel(ctx: ExtensionContext, state: RuntimeState): Promise<void> {
+  if (!ctx.hasUI) return;
+  if (!state.enabled) {
+    notifyUser(ctx, "pi-session-summary is disabled");
+    return;
+  }
+  if (state.closeTodoPanel || state.todoPanelPending !== undefined) {
+    dismissTodoPanel(state);
+    return;
+  }
+
+  const request = ++state.todoPanelRequest;
+  const session = state.todoPanelSession;
+  const requestedTicket = state.latestTicketId;
+  state.todoPanelPending = request;
+  let activeClose: (() => void) | undefined;
+  try {
+    const snapshot = await readWorkflowSnapshot({
+      cwd: ctx.cwd,
+      ...(requestedTicket ? { ticketId: requestedTicket } : {}),
+      workflowIntent: true,
+    });
+    const ticketChanged = requestedTicket
+      ? state.latestTicketId !== requestedTicket
+      : Boolean(state.latestTicketId && state.latestTicketId !== snapshot?.context.ticketId);
+    if (
+      request !== state.todoPanelRequest
+      || session !== state.todoPanelSession
+      || !state.sessionActive
+      || !state.enabled
+      || ticketChanged
+    ) return;
+    const plan = snapshot?.plan;
+    const ticketId = snapshot?.context.ticketId;
+    if (!plan || !ticketId) {
+      notifyUser(ctx, "No active plan todo list");
+      return;
+    }
+
+    state.todoPanelPending = undefined;
+    await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+      activeClose = () => done();
+      state.closeTodoPanel = activeClose;
+      return new TodoPanel(tui, theme, ticketId, plan, activeClose);
+    }, { overlay: true, overlayOptions: TODO_PANEL_OVERLAY_OPTIONS });
+  } finally {
+    if (state.todoPanelPending === request) state.todoPanelPending = undefined;
+    if (activeClose && state.closeTodoPanel === activeClose) state.closeTodoPanel = undefined;
+  }
+}
+
+function dismissTodoPanel(state: RuntimeState): void {
+  state.todoPanelRequest += 1;
+  state.todoPanelPending = undefined;
+  const close = state.closeTodoPanel;
+  state.closeTodoPanel = undefined;
+  close?.();
 }
 
 function createSummarizer(ctx: ExtensionContext, state: RuntimeState): SessionSummarySummarizer {
@@ -271,14 +357,16 @@ async function refreshWorkflowContext(
   options: { semanticFallback?: boolean } = {},
 ): Promise<WorkflowContext | undefined> {
   const request = ++state.workflowContextRequest;
-  const context = await readWorkflowContext({
+  const snapshot = await readWorkflowSnapshot({
     cwd: ctx.cwd,
     ...(state.latestTicketId ? { ticketId: state.latestTicketId } : {}),
     workflowIntent: state.latestWorkflowIntent,
   });
   if (!state.sessionActive || request !== state.workflowContextRequest) return undefined;
+  const context = snapshot?.context;
   if (context?.ticketId) state.latestTicketId = context.ticketId;
   state.latestWorkflowContext = context;
+  state.latestWorkflowPlan = snapshot?.plan;
   if (context?.planProgress || options.semanticFallback) showLatestWidget(ctx, state);
   return context;
 }
@@ -434,7 +522,7 @@ async function notifyStatus(ctx: ExtensionContext, state: RuntimeState): Promise
     `latest next step: ${state.latestMetadata?.nextStep ?? "none"}`,
     `latest name: ${state.latestSessionName ?? "none"}`,
     `output path: ${state.outputPath ?? "none"}`,
-    "commands: /session-summary [status|on|off|refresh|name]",
+    "commands: /session-summary [status|on|off|refresh|name|todos]",
   ].join("\n"));
 }
 

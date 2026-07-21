@@ -26,6 +26,28 @@ export interface WorkflowContext {
   evidence?: "explicit-ticket" | "single-in-progress";
 }
 
+export interface WorkflowPlanTask {
+  done: boolean;
+  text: string;
+}
+
+export interface WorkflowPlanSection {
+  heading?: string;
+  tasks: WorkflowPlanTask[];
+}
+
+export interface WorkflowPlan {
+  sections: WorkflowPlanSection[];
+  completed: number;
+  total: number;
+  currentSectionIndex: number;
+}
+
+export interface WorkflowSnapshot {
+  context: WorkflowContext;
+  plan?: WorkflowPlan;
+}
+
 interface WorkflowFeature {
   id: string;
   status?: string;
@@ -55,7 +77,7 @@ export function hasWorkflowIntent(value: unknown): boolean {
   return Boolean(text && WORKFLOW_INTENT_PATTERN.test(text));
 }
 
-export async function readWorkflowContext(request: WorkflowContextRequest): Promise<WorkflowContext | undefined> {
+export async function readWorkflowSnapshot(request: WorkflowContextRequest): Promise<WorkflowSnapshot | undefined> {
   const features = await readFeatures(request.cwd);
   if (!features.length) return undefined;
 
@@ -66,7 +88,7 @@ export async function readWorkflowContext(request: WorkflowContextRequest): Prom
   if (!feature) return undefined;
 
   const checklist = feature.planFile ? await readPlanChecklist(request.cwd, feature.planFile) : undefined;
-  return {
+  const context: WorkflowContext = {
     ticketId: feature.id,
     ...(feature.description ? { description: sanitizeText(feature.description, MAX_DESCRIPTION_CHARS) } : {}),
     ...(feature.planFile ? { planFile: sanitizeText(feature.planFile, MAX_PLAN_FILE_CHARS) } : {}),
@@ -75,6 +97,11 @@ export async function readWorkflowContext(request: WorkflowContextRequest): Prom
     ...(checklist?.planProgress ? { planProgress: checklist.planProgress } : {}),
     evidence: explicitTicket ? "explicit-ticket" : "single-in-progress",
   };
+  return { context, ...(checklist?.plan ? { plan: checklist.plan } : {}) };
+}
+
+export async function readWorkflowContext(request: WorkflowContextRequest): Promise<WorkflowContext | undefined> {
+  return (await readWorkflowSnapshot(request))?.context;
 }
 
 export function formatWorkflowContext(context: WorkflowContext | undefined): string {
@@ -112,19 +139,18 @@ function parseFeaturesYaml(text: string): WorkflowFeature[] {
   let current: Partial<WorkflowFeature> | undefined;
 
   for (const line of text.split(/\r?\n/)) {
-    const id = /^-\s+id:\s*(.+?)\s*$/.exec(line);
-    if (id) {
+    if (/^-\s+/.test(line)) {
       if (current?.id) features.push(current as WorkflowFeature);
-      current = { id: unquote(id[1] ?? "").toLowerCase() };
-      continue;
+      current = {};
     }
     if (!current) continue;
 
-    const field = /^\s+([a-zA-Z_]+):\s*(.*?)\s*$/.exec(line);
+    const field = /^(?:-\s+|\s+)([a-zA-Z_]+):\s*(.*?)\s*$/.exec(line);
     if (!field) continue;
     const key = field[1];
     const value = unquote(field[2] ?? "");
-    if (key === "status") current.status = value;
+    if (key === "id") current.id = value.toLowerCase();
+    else if (key === "status") current.status = value;
     else if (key === "description") current.description = value;
     else if (key === "plan_file") current.planFile = value;
   }
@@ -138,22 +164,26 @@ function singleInProgress(features: readonly WorkflowFeature[]): WorkflowFeature
   return active.length === 1 ? active[0] : undefined;
 }
 
-interface ChecklistItem {
-  done: boolean;
-  text: string;
-}
-
 interface PlanPhase {
   headingLevel: number;
+  heading: string;
   title: string;
-  items: ChecklistItem[];
+  items: WorkflowPlanTask[];
 }
 
-async function readPlanChecklist(cwd: string, planFile: string): Promise<{
+interface ParsedPhaseHeading {
+  heading: string;
+  title: string;
+}
+
+interface PlanChecklist {
   latestCompletedTodo?: string;
   nextOpenTodo?: string;
   planProgress?: PlanProgress;
-} | undefined> {
+  plan?: WorkflowPlan;
+}
+
+async function readPlanChecklist(cwd: string, planFile: string): Promise<PlanChecklist | undefined> {
   const path = safeProjectPath(cwd, planFile);
   if (!path) return undefined;
 
@@ -165,7 +195,7 @@ async function readPlanChecklist(cwd: string, planFile: string): Promise<{
     throw error;
   }
 
-  const allItems: ChecklistItem[] = [];
+  const allItems: WorkflowPlanTask[] = [];
   const phases: PlanPhase[] = [];
   let activePhase: PlanPhase | undefined;
   let openFence: { marker: "`" | "~"; length: number } | undefined;
@@ -188,9 +218,9 @@ async function readPlanChecklist(cwd: string, planFile: string): Promise<{
 
     const heading = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
     if (heading) {
-      const title = phaseTitle(heading[2] ?? "");
-      if (title) {
-        activePhase = { headingLevel: heading[1]?.length ?? 1, title, items: [] };
+      const phaseHeading = parsePhaseHeading(heading[2] ?? "");
+      if (phaseHeading) {
+        activePhase = { headingLevel: heading[1]?.length ?? 1, ...phaseHeading, items: [] };
         phases.push(activePhase);
       } else if (activePhase && (heading[1]?.length ?? 1) <= activePhase.headingLevel) {
         activePhase = undefined;
@@ -224,18 +254,30 @@ async function readPlanChecklist(cwd: string, planFile: string): Promise<{
     completed: selectedPhase.items.filter((item) => item.done).length,
     total: selectedPhase.items.length,
   } satisfies PlanProgress : undefined;
+  const sections: WorkflowPlanSection[] = phaseItems.length
+    ? populatedPhases.map((phase) => ({ heading: phase.heading, tasks: phase.items }))
+    : allItems.length ? [{ tasks: allItems }] : [];
+  const plan = sections.length ? {
+    sections,
+    completed: items.filter((item) => item.done).length,
+    total: items.length,
+    currentSectionIndex: phaseItems.length ? Math.max(0, selectedPhaseIndex) : 0,
+  } satisfies WorkflowPlan : undefined;
 
   return {
     ...(latestCompletedTodo ? { latestCompletedTodo } : {}),
     ...(nextOpenTodo ? { nextOpenTodo } : {}),
     ...(planProgress ? { planProgress } : {}),
+    ...(plan ? { plan } : {}),
   };
 }
 
-function phaseTitle(heading: string): string | undefined {
-  const match = /^(?:phase|stage)\s+\d+\s*(?::|[-–—])\s*(.+)$/i.exec(heading.trim());
-  const title = sanitizeText(match?.[1] ?? "", MAX_PHASE_TITLE_CHARS);
-  return title || undefined;
+function parsePhaseHeading(value: string): ParsedPhaseHeading | undefined {
+  const match = /^(phase|stage)\s+(\d+)\s*(?::|[-–—])\s*(.+)$/i.exec(value.trim());
+  const title = sanitizeText(match?.[3] ?? "", MAX_PHASE_TITLE_CHARS);
+  if (!match || !title) return undefined;
+  const kind = match[1]?.toLowerCase() === "stage" ? "Stage" : "Phase";
+  return { heading: `${kind} ${match[2]} · ${title}`, title };
 }
 
 function safeProjectPath(cwd: string, path: string): string | undefined {

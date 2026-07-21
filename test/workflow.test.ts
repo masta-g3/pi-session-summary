@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { extractTicketId, hasWorkflowIntent, readWorkflowContext, workflowSessionName } from "../src/workflow.js";
+import { extractTicketId, formatWorkflowContext, hasWorkflowIntent, readWorkflowContext, readWorkflowSnapshot, workflowSessionName } from "../src/workflow.js";
 
 test("extracts ticket ids from prompt text", () => {
   assert.equal(extractTicketId("please execute Metadata-002 now"), "metadata-002");
@@ -51,6 +51,25 @@ test("selects explicit ticket and reads plan checklist", async () => {
   });
 });
 
+test("reads feature ids regardless of YAML field order", async () => {
+  const dir = await workflowRepo(`
+- id: metadata-004
+  status: done
+  plan_file: agent-work/history/metadata-004.md
+- epic: metadata
+  description: "Plan todo overlay"
+  priority: 1
+  id: metadata-005
+  status: in_progress
+  plan_file: agent-work/plans/metadata-002.md
+`, "- [ ] Show the active plan");
+
+  const snapshot = await readWorkflowSnapshot({ cwd: dir, workflowIntent: true });
+  assert.equal(snapshot?.context.ticketId, "metadata-005");
+  assert.equal(snapshot?.context.planFile, "agent-work/plans/metadata-002.md");
+  assert.equal(snapshot?.plan?.sections[0]?.tasks[0]?.text, "Show the active plan");
+});
+
 test("uses single in-progress ticket only with workflow intent", async () => {
   const dir = await workflowRepo(`
 - id: metadata-002
@@ -74,6 +93,146 @@ test("does not guess among multiple in-progress tickets", async () => {
 `, "");
 
   assert.equal(await readWorkflowContext({ cwd: dir, workflowIntent: true }), undefined);
+});
+
+test("returns every executable phased task in a structured snapshot", async () => {
+  const dir = await workflowRepo(`
+- id: metadata-002
+  status: in_progress
+  description: "Workflow metadata"
+  plan_file: agent-work/plans/metadata-002.md
+`, `
+## Preparation
+- [ ] Do not include background reading
+
+### Phase 1: Define the contract
+- [x] Confirm fields
+- [x] Document limits
+
+### Phase 2: Empty section
+
+### Stage 3 — Validate behavior
+- [ ] Run integration checks
+- [ ] Verify Unicode café 漢字
+
+## Appendix
+- [ ] Do not include appendix work
+`);
+
+  const snapshot = await readWorkflowSnapshot({ cwd: dir, ticketId: "metadata-002" });
+  assert.deepEqual(snapshot?.plan, {
+    sections: [
+      {
+        heading: "Phase 1 · Define the contract",
+        tasks: [
+          { done: true, text: "Confirm fields" },
+          { done: true, text: "Document limits" },
+        ],
+      },
+      {
+        heading: "Stage 3 · Validate behavior",
+        tasks: [
+          { done: false, text: "Run integration checks" },
+          { done: false, text: "Verify Unicode café 漢字" },
+        ],
+      },
+    ],
+    completed: 2,
+    total: 4,
+    currentSectionIndex: 1,
+  });
+  assert.equal(snapshot?.context.planProgress?.phaseIndex, 2);
+  assert.doesNotMatch(formatWorkflowContext(snapshot?.context), /Confirm fields|Verify Unicode/);
+});
+
+test("returns one untitled section for a flat legacy checklist", async () => {
+  const dir = await workflowRepo(`
+- id: metadata-002
+  status: in_progress
+  description: "Workflow metadata"
+  plan_file: agent-work/plans/metadata-002.md
+`, `
+# Plan
+- [x] Add parser
+- [ ] Build drawer
+- [ ] Verify package
+`);
+
+  const snapshot = await readWorkflowSnapshot({ cwd: dir, ticketId: "metadata-002" });
+  assert.deepEqual(snapshot?.plan, {
+    sections: [{
+      tasks: [
+        { done: true, text: "Add parser" },
+        { done: false, text: "Build drawer" },
+        { done: false, text: "Verify package" },
+      ],
+    }],
+    completed: 1,
+    total: 3,
+    currentSectionIndex: 0,
+  });
+  assert.equal(snapshot?.context.planProgress, undefined);
+});
+
+test("sanitizes snapshot tasks and excludes fenced examples", async () => {
+  const longTask = `Ship ${"carefully ".repeat(30)}`;
+  const dir = await workflowRepo(`
+- id: metadata-002
+  status: in_progress
+  description: "Workflow metadata"
+  plan_file: agent-work/plans/metadata-002.md
+`, `
+~~~~md
+\`\`\`md
+### Phase 9: Example
+- [ ] Do not include this
+\`\`\`
+~~~~
+
+### Phase 4: Real work
+- [x] Finished task
+- [ ] ${longTask}
+`);
+
+  const plan = (await readWorkflowSnapshot({ cwd: dir, ticketId: "metadata-002" }))?.plan;
+  assert.equal(plan?.total, 2);
+  assert.equal(plan?.sections[0]?.heading, "Phase 4 · Real work");
+  assert.equal(plan?.sections[0]?.tasks[1]?.text.endsWith("…"), true);
+  assert.ok((plan?.sections[0]?.tasks[1]?.text.length ?? 0) <= 120);
+  assert.doesNotMatch(JSON.stringify(plan), /Do not include/);
+});
+
+test("keeps all-complete snapshots and omits unavailable or unsafe plans", async () => {
+  const completeDir = await workflowRepo(`
+- id: metadata-002
+  status: in_progress
+  plan_file: agent-work/plans/metadata-002.md
+`, `
+### Phase 1: Implement
+- [x] Add parser
+### Phase 2: Verify
+- [x] Run tests
+`);
+  const complete = await readWorkflowSnapshot({ cwd: completeDir, ticketId: "metadata-002" });
+  assert.deepEqual(complete?.plan && {
+    completed: complete.plan.completed,
+    total: complete.plan.total,
+    currentSectionIndex: complete.plan.currentSectionIndex,
+  }, { completed: 2, total: 2, currentSectionIndex: 1 });
+
+  const missingDir = await workflowRepo(`
+- id: metadata-002
+  status: in_progress
+  plan_file: agent-work/plans/missing.md
+`, "");
+  assert.equal((await readWorkflowSnapshot({ cwd: missingDir, ticketId: "metadata-002" }))?.plan, undefined);
+
+  const unsafeDir = await workflowRepo(`
+- id: metadata-002
+  status: in_progress
+  plan_file: ../outside.md
+`, "");
+  assert.equal((await readWorkflowSnapshot({ cwd: unsafeDir, ticketId: "metadata-002" }))?.plan, undefined);
 });
 
 test("reads current progress from phased plan checklists", async () => {
