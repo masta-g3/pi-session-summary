@@ -18,6 +18,7 @@ const CUSTOM_CATEGORIES: MetadataQualityCategory[] = [
   { field: "status", id: "status freshness" },
   { field: "nextStep", id: "next action evidence" },
   { field: "stage", id: "stage fit" },
+  { field: "attention", id: "attention evidence" },
   { field: "privacy", id: "privacy leakage" },
   { field: "turn", id: "turn grouping" },
 ];
@@ -82,8 +83,20 @@ test("uses freeform quality categories in report output", () => {
   ], { categories: CUSTOM_CATEGORIES });
   const output = formatMetadataQualityReport(report);
 
-  assert.match(output, /Categories: goal stability, status freshness, next action evidence, stage fit, privacy leakage, turn grouping/);
+  assert.match(output, /Categories: goal stability, status freshness, next action evidence, stage fit, attention evidence, privacy leakage, turn grouping/);
   assert.match(output, /next action evidence: final in-progress entry has no evidenced nextStep/);
+});
+
+test("flags invalid attention claims in sampled metadata", () => {
+  const mismatch = entry({ stage: "waiting" });
+  mismatch.metadata.attention = { kind: "ready", text: "Ready for review" };
+  const uncertain = entry({ stage: "complete", confidence: 0.4 });
+  uncertain.metadata.attention = { kind: "ready", text: "Ready for review" };
+
+  const report = evaluateMetadataHistory([mismatch, uncertain]);
+
+  assert.ok(report.issues.some((issue) => issue.field === "attention" && issue.message.includes("does not match stage")));
+  assert.ok(report.issues.some((issue) => issue.field === "attention" && issue.message.includes("confidence")));
 });
 
 test("warns on final-state quality problems", () => {

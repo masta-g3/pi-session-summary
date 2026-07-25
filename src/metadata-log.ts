@@ -2,7 +2,7 @@ import { appendFile, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { SessionMetadataUpdate } from "./summarizer.js";
 import { HUB_DIR_ENV, HUB_SESSION_ID_ENV, safeSessionId } from "./state-output.js";
-import type { SummaryStage } from "./text.js";
+import type { SessionAttention, SummaryStage } from "./text.js";
 
 export const METADATA_HISTORY_ENV = "PI_SESSION_SUMMARY_METADATA_HISTORY";
 
@@ -19,6 +19,7 @@ export interface SessionMetadataLogEntry {
     stage: SummaryStage;
     nextStep?: string;
     confidence?: number;
+    attention?: SessionAttention;
   };
 }
 
@@ -44,6 +45,7 @@ export function metadataLogEntry(sessionId: string, metadata: SessionMetadataUpd
       stage: metadata.stage,
       ...(metadata.nextStep ? { nextStep: metadata.nextStep } : {}),
       ...(metadata.confidence !== undefined ? { confidence: metadata.confidence } : {}),
+      ...(metadata.attention ? { attention: metadata.attention } : {}),
     },
   };
 }

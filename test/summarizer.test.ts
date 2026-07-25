@@ -105,7 +105,12 @@ test("flush waits for in-flight metadata before final follow-up", async () => {
       calls++;
       prompts.push(request.messages[0]?.content[0]?.text ?? "");
       if (calls === 1) return new Promise((resolve) => { resolveGenerate = resolve; });
-      return Promise.resolve({ stopReason: "stop", content: [{ type: "text", text: metadataJson({ stage: "complete", status: "Metadata history explained", nextStep: "" }) }] });
+      return Promise.resolve({ stopReason: "stop", content: [{ type: "text", text: metadataJson({
+        stage: "complete",
+        status: "Metadata history explained",
+        nextStep: "",
+        attention: { kind: "ready", text: "Metadata history ready for review" },
+      }) }] });
     }) as never,
     publish: () => {},
     publishState: (state) => { states.push(state); },
@@ -116,12 +121,17 @@ test("flush waits for in-flight metadata before final follow-up", async () => {
 
   activity.record("final", "Metadata history explained.");
   const flush = summarizer.flushPending("complete", 1_000);
-  resolveGenerate?.({ stopReason: "stop", content: [{ type: "text", text: metadataJson({ stage: "reading", status: "Reading metadata history docs" }) }] });
+  resolveGenerate?.({ stopReason: "stop", content: [{ type: "text", text: metadataJson({
+    stage: "complete",
+    status: "Premature completion claim",
+    attention: { kind: "ready", text: "Must be stripped from running request" },
+  }) }] });
   await flush;
 
   assert.equal(calls, 2);
   assert.match(prompts[1] ?? "", /Agent state: complete/);
-  assert.equal((states.at(-1) as { stage: string }).stage, "complete");
+  assert.equal((states[0] as { attention?: unknown }).attention, undefined);
+  assert.deepEqual((states.at(-1) as { attention?: unknown }).attention, { kind: "ready", text: "Metadata history ready for review" });
 });
 
 test("publishes parsed model metadata JSON", async () => {
@@ -192,6 +202,90 @@ test("publishes blocked and complete stages as metadata", async () => {
     assert.equal((states[0] as { stage: string }).stage, stage);
     assert.equal("state" in (states[0] as Record<string, unknown>), false);
   }
+});
+
+test("retains attention only after the agent yields", async () => {
+  for (const item of [
+    { agentState: "complete", stage: "complete", kind: "ready" },
+    { agentState: "waiting", stage: "waiting", kind: "question" },
+    { agentState: "waiting", stage: "blocked", kind: "blocked" },
+  ] as const) {
+    const scheduler = new FakeScheduler();
+    const activity = createActivityBuffer();
+    const published: unknown[] = [];
+    const states: unknown[] = [];
+    const summarizer = new SessionSummarySummarizer({
+      now: () => 10,
+      scheduler,
+      activity,
+      getAuth: async () => auth() as never,
+      generate: (async () => ({
+        stopReason: "stop",
+        content: [{ type: "text", text: metadataJson({
+          stage: item.stage,
+          attention: { kind: item.kind, text: "Human action needed" },
+        }) }],
+      })) as never,
+      publish: (metadata) => { published.push(metadata); },
+      publishState: (state) => { states.push(state); },
+    });
+    summarizer.schedule("forced", item.agentState);
+    scheduler.runNext();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual((published[0] as { attention?: unknown }).attention, { kind: item.kind, text: "Human action needed" });
+    assert.deepEqual((states[0] as { attention?: unknown }).attention, { kind: item.kind, text: "Human action needed" });
+    assert.deepEqual(summarizer.previousMetadata()?.attention, { kind: item.kind, text: "Human action needed" });
+  }
+});
+
+test("strips model attention from every running metadata copy", async () => {
+  const scheduler = new FakeScheduler();
+  const activity = createActivityBuffer();
+  const published: unknown[] = [];
+  const states: unknown[] = [];
+  const summarizer = new SessionSummarySummarizer({
+    now: () => 10,
+    scheduler,
+    activity,
+    getAuth: async () => auth() as never,
+    generate: (async () => ({
+      stopReason: "stop",
+      content: [{ type: "text", text: metadataJson({
+        stage: "complete",
+        attention: { kind: "ready", text: "Should not leak mid-turn" },
+      }) }],
+    })) as never,
+    publish: (metadata) => { published.push(metadata); },
+    publishState: (state) => { states.push(state); },
+  });
+  summarizer.schedule("forced", "running");
+  scheduler.runNext();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal((published[0] as { attention?: unknown }).attention, undefined);
+  assert.equal((states[0] as { attention?: unknown }).attention, undefined);
+  assert.equal(summarizer.previousMetadata()?.attention, undefined);
+});
+
+test("uses a response budget large enough for bounded attention metadata", async () => {
+  const scheduler = new FakeScheduler();
+  const activity = createActivityBuffer();
+  let maxTokens = 0;
+  const summarizer = new SessionSummarySummarizer({
+    now: () => 10,
+    scheduler,
+    activity,
+    getAuth: async () => auth() as never,
+    generate: (async (_model: unknown, _request: unknown, options: { maxTokens: number }) => {
+      maxTokens = options.maxTokens;
+      return { stopReason: "stop", content: [{ type: "text", text: metadataJson() }] };
+    }) as never,
+    publish: () => {},
+    publishState: () => {},
+  });
+  summarizer.schedule("forced", "running");
+  scheduler.runNext();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(maxTokens, 320);
 });
 
 test("includes workflow context in prompt at request time", async () => {
@@ -344,6 +438,41 @@ test("can preserve previous metadata across per-turn reset", async () => {
   scheduler.runNext();
   await new Promise((resolve) => setImmediate(resolve));
   assert.match(prompts[1] ?? "", /goal: Make subagent display compact by default\./);
+});
+
+test("per-turn reset preserves narrative metadata but clears attention continuity", async () => {
+  const scheduler = new FakeScheduler();
+  const activity = createActivityBuffer();
+  const prompts: string[] = [];
+  let call = 0;
+  const summarizer = new SessionSummarySummarizer({
+    now: () => call * 10,
+    scheduler,
+    activity,
+    getAuth: async () => auth() as never,
+    generate: (async (_model: unknown, request: { messages: { content: { text: string }[] }[] }) => {
+      prompts.push(request.messages[0]?.content[0]?.text ?? "");
+      call++;
+      return { stopReason: "stop", content: [{ type: "text", text: metadataJson({
+        stage: "complete",
+        attention: { kind: "ready", text: "Ready for review" },
+      }) }] };
+    }) as never,
+    publish: () => {},
+    publishState: () => {},
+  });
+  summarizer.schedule("forced", "complete");
+  scheduler.runNext();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(summarizer.previousMetadata()?.attention?.kind, "ready");
+
+  summarizer.reset({ keepMetadata: true, clearAttention: true });
+  assert.equal(summarizer.previousMetadata()?.attention, undefined);
+  summarizer.schedule("forced", "running");
+  scheduler.runNext();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(prompts[1] ?? "", /goal: Make subagent display compact by default\./);
+  assert.doesNotMatch(prompts[1] ?? "", /Ready for review|attention:/);
 });
 
 test("publishes no model without fake metadata fields", async () => {

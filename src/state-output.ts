@@ -1,7 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { SummaryStage } from "./text.js";
+import type { SessionAttention, SummaryStage } from "./text.js";
+
+export interface SessionPlanSummary {
+  feature?: string;
+  phase?: {
+    title: string;
+    index: number;
+    count: number;
+  };
+  tasks?: {
+    completed: number;
+    total: number;
+  };
+  nextStep?: string;
+}
 
 export interface HubSessionMetadataFile {
   source?: "pi-session-summary";
@@ -10,7 +24,9 @@ export interface HubSessionMetadataFile {
   nextStep?: string;
   stage?: SummaryStage;
   confidence?: number;
+  attention?: SessionAttention;
   updatedAt?: number;
+  plan?: SessionPlanSummary;
 }
 
 export const HUB_DIR_ENV = "PI_AGENT_HUB_DIR";

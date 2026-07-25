@@ -69,8 +69,9 @@ test("builds metadata log entries from session metadata updates", () => {
     goal: "Debug metadata history",
     status: "Helper tests written",
     nextStep: "Wire runtime append",
-    stage: "editing",
-    confidence: 0,
+    stage: "blocked",
+    confidence: 0.9,
+    attention: { kind: "blocked", text: "Needs API credentials" },
     model: "openai-codex/gpt-5.4-mini",
     generatedAt: 123,
     sequence: 7,
@@ -85,8 +86,9 @@ test("builds metadata log entries from session metadata updates", () => {
       goal: "Debug metadata history",
       status: "Helper tests written",
       nextStep: "Wire runtime append",
-      stage: "editing",
-      confidence: 0,
+      stage: "blocked",
+      confidence: 0.9,
+      attention: { kind: "blocked", text: "Needs API credentials" },
     },
   });
 

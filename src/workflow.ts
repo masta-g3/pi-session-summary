@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
+import type { SessionPlanSummary } from "./state-output.js";
 import { compactUnknown, sanitizeText } from "./text.js";
 
 export interface WorkflowContextRequest {
@@ -18,6 +19,7 @@ export interface PlanProgress {
 
 export interface WorkflowContext {
   ticketId?: string;
+  title?: string;
   description?: string;
   planFile?: string;
   latestCompletedTodo?: string;
@@ -51,13 +53,15 @@ export interface WorkflowSnapshot {
 interface WorkflowFeature {
   id: string;
   status?: string;
+  title?: string;
   description?: string;
   planFile?: string;
 }
 
 const FEATURES_PATH = "agent-work/features.yaml";
-const TICKET_PATTERN = /\b([a-z][a-z0-9_]*-\d{3,})\b/i;
+const TICKET_PATTERN = /\b([a-z][a-z0-9_-]*-\d{3,})\b/i;
 const WORKFLOW_INTENT_PATTERN = /\b(execute|review|reflect|commit|next[-\s]?feature|plan[-\s]?md|prime|workflow ticket)\b|\b(?:continue|resume)\b.{0,32}\b(?:active\s+)?(?:plan|ticket|workflow|feature)\b/i;
+const MAX_TITLE_CHARS = 80;
 const MAX_DESCRIPTION_CHARS = 120;
 const MAX_TODO_CHARS = 120;
 const MAX_PHASE_TITLE_CHARS = 80;
@@ -90,6 +94,7 @@ export async function readWorkflowSnapshot(request: WorkflowContextRequest): Pro
   const checklist = feature.planFile ? await readPlanChecklist(request.cwd, feature.planFile) : undefined;
   const context: WorkflowContext = {
     ticketId: feature.id,
+    ...(feature.title ? { title: sanitizeText(feature.title, MAX_TITLE_CHARS) } : {}),
     ...(feature.description ? { description: sanitizeText(feature.description, MAX_DESCRIPTION_CHARS) } : {}),
     ...(feature.planFile ? { planFile: sanitizeText(feature.planFile, MAX_PLAN_FILE_CHARS) } : {}),
     ...(checklist?.latestCompletedTodo ? { latestCompletedTodo: checklist.latestCompletedTodo } : {}),
@@ -104,10 +109,25 @@ export async function readWorkflowContext(request: WorkflowContextRequest): Prom
   return (await readWorkflowSnapshot(request))?.context;
 }
 
+export function sessionPlanSummary(context: WorkflowContext | undefined): SessionPlanSummary | undefined {
+  if (!context) return undefined;
+  const progress = context.planProgress;
+  const plan: SessionPlanSummary = {
+    ...(context.title ? { feature: context.title } : {}),
+    ...(progress ? {
+      phase: { title: progress.title, index: progress.phaseIndex, count: progress.phaseCount },
+      tasks: { completed: progress.completed, total: progress.total },
+    } : {}),
+    ...(context.nextOpenTodo ? { nextStep: context.nextOpenTodo } : {}),
+  };
+  return Object.keys(plan).length ? plan : undefined;
+}
+
 export function formatWorkflowContext(context: WorkflowContext | undefined): string {
   if (!context) return "none";
   return [
     context.ticketId ? `ticket: ${context.ticketId}` : undefined,
+    context.title ? `title: ${context.title}` : undefined,
     context.description ? `description: ${context.description}` : undefined,
     context.planFile ? `planFile: ${context.planFile}` : undefined,
     context.latestCompletedTodo ? `latestCompletedTodo: ${context.latestCompletedTodo}` : undefined,
@@ -117,8 +137,9 @@ export function formatWorkflowContext(context: WorkflowContext | undefined): str
   ].filter(Boolean).join("\n") || "none";
 }
 
-export function workflowSessionName(context: Pick<WorkflowContext, "ticketId" | "description" | "nextOpenTodo" | "latestCompletedTodo"> | undefined): string | undefined {
-  if (!context?.ticketId) return undefined;
+export function workflowSessionName(context: Pick<WorkflowContext, "ticketId" | "title" | "description" | "nextOpenTodo" | "latestCompletedTodo" | "evidence"> | undefined): string | undefined {
+  if (!context?.ticketId || context.evidence !== "explicit-ticket") return undefined;
+  if (context.title) return sanitizeText(context.title, MAX_SESSION_NAME_CHARS);
   const suffix = context.description ?? context.nextOpenTodo ?? context.latestCompletedTodo;
   if (!suffix) return sanitizeText(context.ticketId, MAX_SESSION_NAME_CHARS);
   const maxSuffix = Math.min(MAX_SESSION_SUFFIX_CHARS, Math.max(1, MAX_SESSION_NAME_CHARS - context.ticketId.length - 2));
@@ -151,6 +172,7 @@ function parseFeaturesYaml(text: string): WorkflowFeature[] {
     const value = unquote(field[2] ?? "");
     if (key === "id") current.id = value.toLowerCase();
     else if (key === "status") current.status = value;
+    else if (key === "title") current.title = value;
     else if (key === "description") current.description = value;
     else if (key === "plan_file") current.planFile = value;
   }

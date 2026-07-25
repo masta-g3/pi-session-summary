@@ -87,10 +87,35 @@ test("simulates blocked handoff need as explicit next step", async () => {
   assert.equal(result.state.nextStep, "Needs Playwright browser install");
 });
 
+test("simulates explicit final attention and strips the same claim mid-turn", async () => {
+  for (const item of [
+    { kind: "ready", stage: "complete", agentState: "complete", text: "Implementation ready for review" },
+    { kind: "question", stage: "waiting", agentState: "waiting", text: "Choose the rollout order" },
+    { kind: "blocked", stage: "blocked", agentState: "waiting", text: "Needs production credentials" },
+  ] as const) {
+    const input = {
+      context: ticketContext,
+      activity: [["final", item.text]] as ["final", string][],
+      response: {
+        goal: "workflow-board-001: Attention overlay",
+        status: item.text,
+        stage: item.stage,
+        confidence: 0.9,
+        attention: { kind: item.kind, text: item.text },
+      },
+    };
+    const final = await simulate({ ...input, agentState: item.agentState });
+    assert.deepEqual(final.state.attention, { kind: item.kind, text: item.text });
+    const running = await simulate({ ...input, agentState: "running" });
+    assert.equal(running.state.attention, undefined);
+  }
+});
+
 async function simulate(options: {
   context: WorkflowContext | undefined;
   activity: ["user" | "assistant" | "tool" | "result" | "final" | "error", string][];
   response: Record<string, unknown>;
+  agentState?: "running" | "waiting" | "complete" | "blocked";
 }): Promise<{ prompt: string; state: Record<string, unknown> }> {
   const scheduler = new FakeScheduler();
   const activity = createActivityBuffer();
@@ -110,7 +135,7 @@ async function simulate(options: {
     publish: () => {},
     publishState: (metadata) => { state = metadata as Record<string, unknown>; },
   });
-  summarizer.schedule("forced", "running");
+  summarizer.schedule("forced", options.agentState ?? "running");
   scheduler.run();
   await new Promise((resolve) => setImmediate(resolve));
   return { prompt, state };

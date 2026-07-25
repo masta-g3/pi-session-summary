@@ -8,7 +8,7 @@ import { HUB_SESSION_ID_ENV, sessionMetadataPath, writeSessionMetadata, type Hub
 import { compactUnknown, sanitizeText, type ParsedSessionMetadata } from "./text.js";
 import { TodoPanel, TODO_PANEL_OVERLAY_OPTIONS, TODO_PANEL_SHORTCUT } from "./todo-panel.js";
 import { clearNoModelWarning, clearSessionSummaryWidget, notifyUser, showNoModelWarning, showSessionSummaryWidget } from "./widget.js";
-import { extractTicketId, hasWorkflowIntent, readWorkflowSnapshot, workflowSessionName, type WorkflowContext, type WorkflowPlan } from "./workflow.js";
+import { extractTicketId, hasWorkflowIntent, readWorkflowSnapshot, sessionPlanSummary, workflowSessionName, type WorkflowContext, type WorkflowPlan } from "./workflow.js";
 
 const EXTENSION_KEY = Symbol.for("pi-session-summary.extension.loaded");
 type SessionSummaryGlobal = typeof globalThis & { [EXTENSION_KEY]?: true };
@@ -116,7 +116,9 @@ export default function sessionSummary(pi: ExtensionAPI) {
     state.userTurn += 1;
     state.finalFlushState = undefined;
     state.activity.reset();
-    state.summarizer?.reset({ keepMetadata: true });
+    state.summarizer?.reset({ keepMetadata: true, clearAttention: true });
+    state.latestMetadata = state.summarizer?.previousMetadata();
+    void publishMetadata(ctx, state);
     const prompt = (event as { prompt?: unknown }).prompt;
     const promptText = compactUnknown(prompt, 1_500);
     const promptTicketId = extractTicketId(promptText);
@@ -330,6 +332,7 @@ function createSummarizer(ctx: ExtensionContext, state: RuntimeState): SessionSu
         stage: metadata.stage,
         ...(metadata.nextStep ? { nextStep: metadata.nextStep } : {}),
         ...(metadata.confidence !== undefined ? { confidence: metadata.confidence } : {}),
+        ...(metadata.attention ? { attention: metadata.attention } : {}),
       };
       state.activeModel = metadata.model;
       showLatestWidget(ctx, state);
@@ -363,10 +366,13 @@ async function refreshWorkflowContext(
     workflowIntent: state.latestWorkflowIntent,
   });
   if (!state.sessionActive || request !== state.workflowContextRequest) return undefined;
+  const previousPlan = sessionPlanSummary(state.latestWorkflowContext);
   const context = snapshot?.context;
-  if (context?.ticketId) state.latestTicketId = context.ticketId;
+  if (context?.evidence === "explicit-ticket") state.latestTicketId = context.ticketId;
   state.latestWorkflowContext = context;
   state.latestWorkflowPlan = snapshot?.plan;
+  const nextPlan = sessionPlanSummary(context);
+  if (JSON.stringify(previousPlan) !== JSON.stringify(nextPlan)) await publishMetadata(ctx, state);
   if (context?.planProgress || options.semanticFallback) showLatestWidget(ctx, state);
   return context;
 }
@@ -489,6 +495,7 @@ async function generateAndSetName(
 async function publishMetadata(_ctx: ExtensionContext, state: RuntimeState, partial: HubMetadataUpdate = {}): Promise<void> {
   state.sequence += 1;
   const latest = partial.clear ? undefined : state.latestMetadata;
+  const plan = sessionPlanSummary(state.latestWorkflowContext);
   const output: HubSessionMetadataFile = {
     source: "pi-session-summary",
     updatedAt: partial.updatedAt ?? Date.now(),
@@ -497,11 +504,14 @@ async function publishMetadata(_ctx: ExtensionContext, state: RuntimeState, part
     ...(latest?.stage ? { stage: latest.stage } : {}),
     ...(latest?.nextStep ? { nextStep: latest.nextStep } : {}),
     ...(latest?.confidence !== undefined ? { confidence: latest.confidence } : {}),
+    ...(latest?.attention ? { attention: latest.attention } : {}),
     ...(partial.goal ? { goal: partial.goal } : {}),
     ...(partial.status ? { status: partial.status } : {}),
     ...(partial.stage ? { stage: partial.stage } : {}),
     ...(partial.nextStep ? { nextStep: partial.nextStep } : {}),
     ...(partial.confidence !== undefined ? { confidence: partial.confidence } : {}),
+    ...(partial.attention ? { attention: partial.attention } : {}),
+    ...(plan ? { plan } : {}),
   };
   state.writeChain = state.writeChain.then(
     () => writeSessionMetadata(output, state.outputPath).catch(() => {}),

@@ -3,10 +3,43 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { extractTicketId, formatWorkflowContext, hasWorkflowIntent, readWorkflowContext, readWorkflowSnapshot, workflowSessionName } from "../src/workflow.js";
+import { extractTicketId, formatWorkflowContext, hasWorkflowIntent, readWorkflowContext, readWorkflowSnapshot, sessionPlanSummary, workflowSessionName } from "../src/workflow.js";
+
+test("maps only compact deterministic workflow context to plan metadata", () => {
+  assert.deepEqual(sessionPlanSummary({
+    ticketId: "workflow-board-001",
+    title: "Rich workflow board",
+    description: "Replace stages with a responsive workflow board.",
+    planFile: "agent-work/plans/workflow-board-001.md",
+    latestCompletedTodo: "Add producer types",
+    nextOpenTodo: "Refresh after checklist edits",
+    planProgress: {
+      phaseIndex: 2,
+      phaseCount: 4,
+      title: "Publish plan metadata",
+      completed: 2,
+      total: 5,
+    },
+  }), {
+    feature: "Rich workflow board",
+    phase: { title: "Publish plan metadata", index: 2, count: 4 },
+    tasks: { completed: 2, total: 5 },
+    nextStep: "Refresh after checklist edits",
+  });
+  assert.deepEqual(sessionPlanSummary({ title: "Flat checklist", description: "Long feature prose", nextOpenTodo: "Run checks" }), {
+    feature: "Flat checklist",
+    nextStep: "Run checks",
+  });
+  assert.deepEqual(sessionPlanSummary({ description: "Long feature prose", nextOpenTodo: "Run checks" }), {
+    nextStep: "Run checks",
+  });
+  assert.equal(sessionPlanSummary({ ticketId: "workflow-board-001" }), undefined);
+  assert.equal(sessionPlanSummary(undefined), undefined);
+});
 
 test("extracts ticket ids from prompt text", () => {
   assert.equal(extractTicketId("please execute Metadata-002 now"), "metadata-002");
+  assert.equal(extractTicketId("execute workflow-board-001"), "workflow-board-001");
   assert.equal(extractTicketId("no ticket here"), undefined);
 });
 
@@ -30,6 +63,7 @@ test("selects explicit ticket and reads plan checklist", async () => {
   description: "Old metadata work"
 - id: metadata-002
   status: pending
+  title: "Compact metadata titles"
   description: "Workflow-grounded session metadata and titles for dashboard supervision"
   plan_file: agent-work/plans/metadata-002.md
 `, `
@@ -43,12 +77,35 @@ test("selects explicit ticket and reads plan checklist", async () => {
 
   assert.deepEqual(await readWorkflowContext({ cwd: dir, ticketId: "metadata-002", workflowIntent: false }), {
     ticketId: "metadata-002",
+    title: "Compact metadata titles",
     description: "Workflow-grounded session metadata and titles for dashboard supervision",
     planFile: "agent-work/plans/metadata-002.md",
     latestCompletedTodo: "Implement workflow context reader",
     nextOpenTodo: "Wire context into summarizer prompt",
     evidence: "explicit-ticket",
   });
+});
+
+test("reads quoted and plain feature titles", async () => {
+  const quoted = await workflowRepo(`
+- id: metadata-002
+  status: in_progress
+  title: "Compact metadata titles"
+  description: "Full model context remains available"
+`, "");
+  assert.deepEqual(await readWorkflowContext({ cwd: quoted, ticketId: "metadata-002" }), {
+    ticketId: "metadata-002",
+    title: "Compact metadata titles",
+    description: "Full model context remains available",
+    evidence: "explicit-ticket",
+  });
+
+  const plain = await workflowRepo(`
+- id: metadata-002
+  title: Plain workflow title
+  status: in_progress
+`, "");
+  assert.equal((await readWorkflowContext({ cwd: plain, ticketId: "metadata-002" }))?.title, "Plain workflow title");
 });
 
 test("reads feature ids regardless of YAML field order", async () => {
@@ -198,7 +255,8 @@ test("sanitizes snapshot tasks and excludes fenced examples", async () => {
   assert.equal(plan?.total, 2);
   assert.equal(plan?.sections[0]?.heading, "Phase 4 · Real work");
   assert.equal(plan?.sections[0]?.tasks[1]?.text.endsWith("…"), true);
-  assert.ok((plan?.sections[0]?.tasks[1]?.text.length ?? 0) <= 120);
+  assert.equal(plan?.sections[0]?.tasks[1]?.text.length, 120);
+  assert.equal((await readWorkflowContext({ cwd: dir, ticketId: "metadata-002" }))?.nextOpenTodo?.length, 120);
   assert.doesNotMatch(JSON.stringify(plan), /Do not include/);
 });
 
@@ -388,13 +446,25 @@ test("sanitizes context fields and rejects plan paths outside repo", async () =>
   assert.equal(context?.nextOpenTodo, undefined);
 });
 
-test("formats deterministic workflow session names", () => {
+test("formats session names only for explicit workflow tickets", () => {
+  assert.equal(workflowSessionName({
+    ticketId: "metadata-002",
+    title: "Compact metadata titles",
+    description: "Workflow-grounded session metadata and titles for dashboard supervision",
+    evidence: "explicit-ticket",
+  }), "Compact metadata titles");
   assert.equal(workflowSessionName({
     ticketId: "metadata-002",
     description: "Workflow-grounded session metadata and titles for dashboard supervision",
+    evidence: "explicit-ticket",
   }), "metadata-002: Workflow-grounded metadata");
+  assert.equal(workflowSessionName({
+    ticketId: "metadata-002",
+    title: "Wrong inferred title",
+    evidence: "single-in-progress",
+  }), undefined);
   assert.equal(workflowSessionName({ description: "No ticket" }), undefined);
-  assert.ok((workflowSessionName({ ticketId: "metadata-002", description: "x".repeat(200) })?.length ?? 0) <= 80);
+  assert.ok((workflowSessionName({ ticketId: "metadata-002", description: "x".repeat(200), evidence: "explicit-ticket" })?.length ?? 0) <= 80);
 });
 
 async function workflowRepo(features: string, plan: string): Promise<string> {

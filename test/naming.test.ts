@@ -9,7 +9,7 @@ test("sanitizes model-generated session names", () => {
 
 test("limits long session names", () => {
   const name = sanitizeSessionName("A".repeat(120));
-  assert.equal(name.length, 80);
+  assert.equal(name.length, 48);
 });
 
 test("extracts first user message from session entries", () => {

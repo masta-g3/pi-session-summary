@@ -23,6 +23,19 @@ async function readJsonWhenReady(path: string): Promise<Record<string, unknown>>
   return JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
 }
 
+async function readJsonUntil(
+  path: string,
+  predicate: (value: Record<string, unknown>) => boolean,
+): Promise<Record<string, unknown>> {
+  let latest: Record<string, unknown> = {};
+  for (let attempt = 0; attempt < 40; attempt++) {
+    latest = await readJsonWhenReady(path);
+    if (predicate(latest)) return latest;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.fail(`metadata did not reach expected state: ${JSON.stringify(latest)}`);
+}
+
 test("exports a Pi extension factory", () => {
   assert.equal(typeof sessionSummary, "function");
 });
@@ -210,6 +223,50 @@ test("does not open an empty, ambiguous, or non-UI todo overlay", async () => {
   }
 });
 
+test("does not rename a session from inferred workflow context", async () => {
+  resetExtensionSingleton();
+  const dir = await mkdtemp(join(tmpdir(), "pi-session-summary-inferred-name-"));
+  await mkdir(join(dir, "agent-work"), { recursive: true });
+  await writeFile(join(dir, "agent-work", "features.yaml"), `
+- id: workflow-board-001
+  status: in_progress
+  title: "Wrong inferred title"
+`, "utf8");
+
+  const commands = new Map<string, { handler: (args: string, ctx: unknown) => Promise<void> }>();
+  const events = new Map<string, (event: unknown, ctx: unknown) => void | Promise<void>>();
+  let name = "Fix Dashboard Panel Rename Overflow";
+  const ctx = {
+    cwd: dir,
+    hasUI: true,
+    ui: { setWidget() {}, notify() {} },
+    sessionManager: {
+      getBranch: () => [{ type: "message", message: { role: "user", content: "Fix dashboard panel rename overflow" } }],
+    },
+    modelRegistry: { find: () => undefined, getApiKeyAndHeaders: async () => ({ ok: false }) },
+  };
+
+  try {
+    sessionSummary({
+      registerCommand(commandName: string, command: { handler: (args: string, ctx: unknown) => Promise<void> }) { commands.set(commandName, command); },
+      registerShortcut() {},
+      on(eventName: string, handler: (event: unknown, ctx: unknown) => void | Promise<void>) { events.set(eventName, handler); },
+      getSessionName() { return name; },
+      setSessionName(next: string) { name = next; },
+    } as never);
+
+    events.get("session_start")?.({}, ctx as never);
+    events.get("before_agent_start")?.({ prompt: "review this unrelated fix" }, ctx as never);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await commands.get("session-summary")?.handler("name", ctx);
+    assert.equal(name, "Fix Dashboard Panel Rename Overflow");
+  } finally {
+    await events.get("session_shutdown")?.({}, ctx as never);
+    resetExtensionSingleton();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("auto-names unnamed workflow sessions with deterministic ticket title", async () => {
   resetExtensionSingleton();
   const dir = await mkdtemp(join(tmpdir(), "pi-session-summary-name-"));
@@ -336,6 +393,102 @@ test("shows phased plan progress without a summary model", async () => {
     assert.equal(widgets.get("pi-session-summary"), undefined);
   } finally {
     await events.get("session_shutdown")?.({}, ctx as never);
+    resetExtensionSingleton();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("publishes, refreshes, and clears deterministic plan metadata without a model", async () => {
+  resetExtensionSingleton();
+  const dir = await mkdtemp(join(tmpdir(), "pi-session-summary-plan-metadata-"));
+  await mkdir(join(dir, "agent-work", "plans"), { recursive: true });
+  const featuresPath = join(dir, "agent-work", "features.yaml");
+  const planPath = join(dir, "agent-work", "plans", "workflow-board-001.md");
+  await writeFile(featuresPath, `
+- id: workflow-board-001
+  status: in_progress
+  title: "Rich workflow board"
+  description: "Replace stages with a responsive workflow board."
+  plan_file: agent-work/plans/workflow-board-001.md
+`, "utf8");
+  await writeFile(planPath, `
+### Phase 1: Parse the plan
+- [x] Read the workflow snapshot
+
+### Phase 2: Publish plan metadata
+- [x] Add producer types
+- [ ] Refresh after checklist edits
+- [ ] Verify clearing behavior
+`, "utf8");
+
+  const previousHubDir = process.env.PI_AGENT_HUB_DIR;
+  const previousSessionId = process.env.PI_AGENT_HUB_SESSION_ID;
+  process.env.PI_AGENT_HUB_DIR = dir;
+  process.env.PI_AGENT_HUB_SESSION_ID = "plan-metadata";
+  const events = new Map<string, (event: unknown, ctx: unknown) => void | Promise<void>>();
+  const ctx = {
+    cwd: dir,
+    hasUI: false,
+    sessionManager: { getBranch: () => [] },
+    modelRegistry: { find: () => undefined, getApiKeyAndHeaders: async () => ({ ok: false }) },
+  };
+
+  try {
+    sessionSummary({
+      registerCommand() {},
+      registerShortcut() {},
+      on(name: string, handler: (event: unknown, ctx: unknown) => void | Promise<void>) { events.set(name, handler); },
+      getSessionName() { return "Workflow board"; },
+    } as never);
+
+    await events.get("session_start")?.({}, ctx as never);
+    events.get("before_agent_start")?.({ prompt: "execute workflow-board-001" }, ctx as never);
+    const statePath = join(dir, "session-metadata", "plan-metadata.json");
+    let parsed = await readJsonUntil(statePath, (value) => (value.plan as { tasks?: { completed?: number } } | undefined)?.tasks?.completed === 1);
+    assert.deepEqual(parsed.plan, {
+      feature: "Rich workflow board",
+      phase: { title: "Publish plan metadata", index: 2, count: 2 },
+      tasks: { completed: 1, total: 3 },
+      nextStep: "Refresh after checklist edits",
+    });
+    assert.equal("goal" in parsed, false);
+
+    await writeFile(planPath, `
+### Phase 1: Parse the plan
+- [x] Read the workflow snapshot
+
+### Phase 2: Publish plan metadata
+- [x] Add producer types
+- [x] Refresh after checklist edits
+- [ ] Verify clearing behavior
+`, "utf8");
+    events.get("tool_execution_end")?.({ name: "edit", result: "updated checklist" }, ctx as never);
+    parsed = await readJsonUntil(statePath, (value) => (value.plan as { tasks?: { completed?: number } } | undefined)?.tasks?.completed === 2);
+    assert.deepEqual(parsed.plan, {
+      feature: "Rich workflow board",
+      phase: { title: "Publish plan metadata", index: 2, count: 2 },
+      tasks: { completed: 2, total: 3 },
+      nextStep: "Verify clearing behavior",
+    });
+
+    await writeFile(planPath, "- [x] Publish metadata\n- [ ] Verify flat checklist output\n", "utf8");
+    events.get("tool_execution_end")?.({ name: "edit", result: "flattened checklist" }, ctx as never);
+    parsed = await readJsonUntil(statePath, (value) => (value.plan as { nextStep?: string } | undefined)?.nextStep === "Verify flat checklist output");
+    assert.deepEqual(parsed.plan, {
+      feature: "Rich workflow board",
+      nextStep: "Verify flat checklist output",
+    });
+
+    await writeFile(featuresPath, "- id: other-001\n  status: in_progress\n", "utf8");
+    events.get("tool_execution_end")?.({ name: "edit", result: "removed active ticket" }, ctx as never);
+    parsed = await readJsonUntil(statePath, (value) => !("plan" in value));
+    assert.equal("plan" in parsed, false);
+  } finally {
+    await events.get("session_shutdown")?.({}, ctx as never);
+    if (previousHubDir === undefined) delete process.env.PI_AGENT_HUB_DIR;
+    else process.env.PI_AGENT_HUB_DIR = previousHubDir;
+    if (previousSessionId === undefined) delete process.env.PI_AGENT_HUB_SESSION_ID;
+    else process.env.PI_AGENT_HUB_SESSION_ID = previousSessionId;
     resetExtensionSingleton();
     await rm(dir, { recursive: true, force: true });
   }

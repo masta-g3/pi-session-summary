@@ -4,7 +4,7 @@ Semantic session metadata and naming for Pi coding-agent sessions.
 
 `pi-session-summary` is a Pi extension package that uses a fast LLM to infer what an agent session is trying to accomplish, what changed most recently, and what should happen next. It renders compact in-session progress and exports latest-only structured metadata for Pi Agent Hub or dashboard views.
 
-When a repo uses Pi's lightweight `agent-work/` workflow files, the extension also uses that context to ground ticket dashboards and show deterministic plan progress: session names can become `ticket-id: abbreviated objective`, `goal` uses the tracked ticket objective, and `nextStep` prefers the next explicit unchecked plan item. This remains optional; the extension works normally without workflow files.
+When a repo uses Pi's lightweight `agent-work/` workflow files, the extension also uses that context to ground ticket dashboards and show deterministic plan progress: explicitly identified tickets can use a deterministic tracked title, `goal` uses the tracked ticket objective, and `nextStep` prefers the next explicit unchecked plan item. This remains optional; the extension works normally without workflow files.
 
 ## Main elements
 
@@ -12,12 +12,13 @@ The extension produces dashboard-oriented semantic metadata and optional in-sess
 
 | Element | Purpose |
 | --- | --- |
-| Session name | Ticket title when workflow context exists; otherwise short title generated from the first prompt or conversation history. |
+| Session name | Deterministic ticket title when a ticket is explicit; otherwise a short title generated from the first prompt or conversation history. |
 | Goal | Durable user-facing objective for the session or workflow ticket. |
 | Status | Terse latest verified progress achieved by the main agent. |
 | Next step | Short explicit planned action or need, when evidenced. |
 | Stage | Current mode: `reading`, `editing`, `testing`, `waiting`, `blocked`, or `complete`. |
-| Plan progress | Current Markdown phase, completed task count, and next unchecked task when available. |
+| Attention | Explicit final `ready`, `question`, or `blocked` reason when human action is useful. |
+| Plan progress | Current Markdown phase, completed task count, and next unchecked task in the widget and optional Hub metadata. |
 | Plan todo drawer | On-demand read-only view of every executable task in the active repo-local plan. |
 
 For an active phased plan, the in-session widget shows deterministic phase progress and the next unchecked task:
@@ -40,7 +41,7 @@ The fuller semantic set also exists for session-management dashboards or Agent H
 
 Internally, the extension captures bounded activity facts such as user prompts, assistant text, tool starts/results, final messages, and errors. Those activity facts are inputs for the model only; they are not the product output and are not written to Agent Hub state.
 
-If `agent-work/features.yaml` and a feature `plan_file` are present, the extension derives compact model evidence—ticket id, description, latest checked item, next unchecked item, and progress for numbered `Phase` or `Stage` headings—and a separate local TUI plan snapshot. The drawer shows all checkboxes under populated numbered phases/stages, excluding checkboxes outside those sections; legacy plans without numbered sections show all flat checklist items. It follows the repo-local `plan_file` and has no dependency on a particular rules repository. Flat checklists do not produce a phase-progress widget. The extension does not mutate workflow files, require Hub, send the full checklist to the model, or write raw plan contents to metadata.
+If `agent-work/features.yaml` and a feature `plan_file` are present, the extension derives compact model evidence—ticket id, description, latest checked item, next unchecked item, and progress for numbered `Phase` or `Stage` headings—and a separate local TUI plan snapshot. The drawer shows all checkboxes under populated numbered phases/stages, excluding checkboxes outside those sections; legacy plans without numbered sections show all flat checklist items. It follows the repo-local `plan_file` and has no dependency on a particular rules repository. Flat checklists do not produce a phase-progress widget, but may publish feature and next-task metadata. The extension does not mutate workflow files, require Hub, or send or publish the full checklist.
 
 ## Requirements
 
@@ -88,7 +89,7 @@ If `sessionSummary.model` is absent or does not resolve to an authenticated mode
 
 The same model is used for optional session naming. The extension auto-names unnamed non-workflow sessions from the first user prompt, and `/session-summary name` refreshes the name from conversation history.
 
-For workflow-ticket sessions, naming is deterministic when context is available: `ticket-id: abbreviated objective`. Pi Agent Hub can display that name through its existing Pi-name sync actions or shortcuts; the metadata file itself does not contain a session-name field.
+For workflow-ticket sessions, naming is deterministic only when the ticket is explicit in the prompt or `set_workflow_ticket` call. Inferred single-in-progress context can ground metadata and plan progress, but cannot rename a session. Pi Agent Hub can display the resulting name through its existing Pi-name sync actions or shortcuts; the metadata file itself does not contain a session-name field.
 
 ## Agent Hub output
 
@@ -106,11 +107,25 @@ interface HubSessionMetadataFile {
   nextStep?: string;
   stage?: "reading" | "editing" | "testing" | "waiting" | "complete" | "blocked" | "unknown";
   confidence?: number;
+  attention?: {
+    kind: "ready" | "question" | "blocked";
+    text: string;
+  };
   updatedAt?: number;
+  plan?: {
+    feature?: string;
+    phase?: { title: string; index: number; count: number };
+    tasks?: { completed: number; total: number };
+    nextStep?: string;
+  };
 }
 ```
 
-Hub displays metadata when at least one of `goal`, `status`, `nextStep`, or `stage` exists and `confidence` is missing or at least `0.5`. `stage` is the model-inferred semantic workflow stage; Hub process liveness comes from Hub, not this file. Raw prompts, tool arguments, command output, plan text, and conversation snippets stay out of the metadata file.
+The optional `plan` object is mapped from the same cached workflow context used by the widget; it does not trigger another plan read. It is published even when no summary model is available and is independent of semantic `confidence`. Checklist refreshes update it through the same serialized atomic write path, and later workflow resolution with no mapped feature, phase, task, or next-step data removes it. Flat checklists can publish a partial feature/next-step object.
+
+Hub displays general semantic metadata when at least one of `goal`, `status`, `nextStep`, or `stage` exists and `confidence` is missing or at least `0.5`; valid deterministic plan data remains separately displayable. Attention is stricter: it requires confidence of at least `0.5`, nonblank text, and `ready/complete`, `question/waiting`, or `blocked/blocked` agreement. The summarizer retains it only for requests launched after the agent has yielded; running requests strip it before either metadata copy is updated. At `before_agent_start`, both the latest-file source and previous-metadata prompt continuity are cleared and the file is rewritten before later model, plan, naming, no-model, or failure paths.
+
+`stage` is model-inferred semantic activity, attention is an explicit human-action claim, and Hub process liveness is authoritative separately. Ordinary waiting does not imply attention. Hub currently renders the attention reason only in its `v` workflow board, so the managed session must be Active and publish valid `workflow-runtime` metadata for the canonical pipeline; groups view and non-workflow sessions do not show the marker. Raw prompts, tool arguments, command output, the full checklist, completion evidence/usage telemetry, and conversation snippets stay out of the metadata file.
 
 For debugging, set `PI_SESSION_SUMMARY_METADATA_HISTORY=1` to append each successful metadata derivation as JSONL:
 
@@ -118,7 +133,7 @@ For debugging, set `PI_SESSION_SUMMARY_METADATA_HISTORY=1` to append each succes
 ${PI_AGENT_HUB_DIR}/session-metadata-history/${PI_AGENT_HUB_SESSION_ID}.jsonl
 ```
 
-Each line includes the Hub session id, generated timestamp, activity sequence, optional `userTurn` correlation number, model id, and sanitized derived metadata. Raw prompts, tool arguments/results, workflow plan text, and conversation snippets are not written to the history log.
+Each line includes the Hub session id, generated timestamp, activity sequence, optional `userTurn` correlation number, model id, and sanitized derived metadata including accepted attention. The quality report checks attention shape, confidence, and stage agreement so sampled false claims can be inspected. Raw prompts, tool arguments/results, workflow plan text, and conversation snippets are not written to the history log.
 
 To inspect a captured history file, run:
 
@@ -128,7 +143,7 @@ npm run metadata:quality -- ${PI_AGENT_HUB_DIR}/session-metadata-history/${PI_AG
 
 ## Privacy and performance
 
-Short recent activity snippets and compact optional workflow evidence are sent to the configured summary model provider. Model calls are asynchronous, throttled, timeout-bound, no-retry, and never awaited by Pi event handlers. `nextStep` is intended to come from explicit evidence such as a stated plan, unchecked todo, user request, or handoff need, not from summarizer speculation.
+Short recent activity snippets and compact optional workflow evidence are sent to the configured summary model provider. Model calls are asynchronous, throttled, timeout-bound, no-retry, and never awaited by Pi event handlers. `nextStep` is intended to come from explicit evidence such as a stated plan, unchecked todo, user request, or handoff need, not from summarizer speculation. Attention is omission-biased: ambiguous completion, uncertainty, or work that can continue produces no attention object.
 
 ## Workflow
 

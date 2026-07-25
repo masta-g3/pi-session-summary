@@ -23,11 +23,25 @@ test("creates parent directory and writes generic Hub metadata JSON", async () =
     stage: "reading",
     nextStep: "Implement parser tests.",
     confidence: 0.86,
+    attention: { kind: "question", text: "Choose the rollout order" },
     updatedAt: 123,
+    plan: {
+      feature: "Replace stages with a responsive workflow board.",
+      phase: { title: "Publish plan metadata", index: 2, count: 4 },
+      tasks: { completed: 2, total: 5 },
+      nextStep: "Refresh after checklist edits",
+    },
   }, path);
   const parsed = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
   assert.equal(parsed.status, "Planning semantic status output.");
   assert.equal(parsed.source, "pi-session-summary");
+  assert.deepEqual(parsed.attention, { kind: "question", text: "Choose the rollout order" });
+  assert.deepEqual(parsed.plan, {
+    feature: "Replace stages with a responsive workflow board.",
+    phase: { title: "Publish plan metadata", index: 2, count: 4 },
+    tasks: { completed: 2, total: 5 },
+    nextStep: "Refresh after checklist edits",
+  });
   assert.equal("version" in parsed, false);
   assert.equal("sessionName" in parsed, false);
   assert.equal("model" in parsed, false);

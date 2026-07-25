@@ -38,7 +38,7 @@ const MIN_MODEL_INTERVAL_MS = 5_000;
 const FINAL_DEBOUNCE_MS = 500;
 const FINAL_FLUSH_TIMEOUT_MS = 1_500;
 const REQUEST_TIMEOUT_MS = 2_500;
-const MAX_METADATA_TOKENS = 220;
+const MAX_METADATA_TOKENS = 320;
 
 export function createDefaultTimerScheduler(): TimerScheduler {
   return {
@@ -90,7 +90,7 @@ export class SessionSummarySummarizer {
     return this.enabled;
   }
 
-  reset(options: { keepMetadata?: boolean } = {}): void {
+  reset(options: { keepMetadata?: boolean; clearAttention?: boolean } = {}): void {
     this.runId++;
     this.clearTimer();
     this.abortController?.abort();
@@ -99,6 +99,7 @@ export class SessionSummarySummarizer {
     this.dirtyWhileInFlight = false;
     this.resolveIdleWaiters();
     if (!options.keepMetadata) this.latestMetadata = undefined;
+    else if (options.clearAttention && this.latestMetadata?.attention) this.latestMetadata = withoutAttention(this.latestMetadata);
     this.lastPublishedAt = Number.NEGATIVE_INFINITY;
     this.agentState = "waiting";
   }
@@ -164,11 +165,12 @@ export class SessionSummarySummarizer {
       const workflowContext = await this.readOptionalWorkflowContext();
       if (!this.isCurrent(runId)) return;
 
+      const requestAgentState = this.agentState;
       abortController = new AbortController();
       this.abortController = abortController;
       const response = await this.generate(auth.model, {
         systemPrompt: SYSTEM_PROMPT,
-        messages: [this.prompt(workflowContext)],
+        messages: [this.prompt(workflowContext, requestAgentState)],
       }, {
         apiKey: auth.apiKey,
         ...(auth.headers ? { headers: auth.headers } : {}),
@@ -184,14 +186,15 @@ export class SessionSummarySummarizer {
 
       const parsed = parseSessionMetadataJson(extractContentText(response.content));
       if (!parsed) return;
+      const accepted = requestAgentState === "running" ? withoutAttention(parsed) : parsed;
 
       const update = {
-        ...parsed,
+        ...accepted,
         model: formatAuthModel(auth),
         generatedAt: this.now(),
         sequence: this.activity.latestSequence(),
       } satisfies SessionMetadataUpdate;
-      this.latestMetadata = parsed;
+      this.latestMetadata = accepted;
       this.lastPublishedAt = update.generatedAt;
       await this.publish(update);
       await this.publishState({
@@ -200,6 +203,7 @@ export class SessionSummarySummarizer {
         stage: update.stage,
         ...(update.nextStep ? { nextStep: update.nextStep } : {}),
         ...(update.confidence !== undefined ? { confidence: update.confidence } : {}),
+        ...(update.attention ? { attention: update.attention } : {}),
         updatedAt: this.now(),
       });
     } catch (error) {
@@ -252,7 +256,7 @@ export class SessionSummarySummarizer {
     }
   }
 
-  private prompt(workflowContext?: WorkflowContext): UserMessage {
+  private prompt(workflowContext: WorkflowContext | undefined, agentState: AgentState): UserMessage {
     const lines = [
       "Latest activity, newest last:",
       ...activityLines(this.activity.all()),
@@ -263,7 +267,7 @@ export class SessionSummarySummarizer {
       "Previous metadata, for continuity:",
       this.formatPreviousMetadata(),
       "",
-      `Agent state: ${this.agentState}`,
+      `Agent state: ${agentState}`,
       "",
       "Update the metadata for what is happening now.",
     ];
@@ -297,9 +301,10 @@ export const SYSTEM_PROMPT = `Write compact dashboard metadata for a Pi coding-a
 Fields:
 - goal: stable ticket/session/request objective. Include ticket id when present. Target 72 chars; max 96.
 - status: latest explicit completed or verified progress milestone by the main agent. Backward-looking. Target 48 chars; max 60.
-- nextStep: next explicit plan/todo/user-requested action or handoff need. Forward-looking. Target 48 chars; max 60; "" if not evidenced.
+- nextStep: next explicit plan/todo/user-requested action. Imperative, ideally 2-7 words, max 48 chars; "" if not evidenced.
 - stage: current session mode from recent activity + previous metadata.
 - confidence: 0 to 1.
+- attention: optional explicit human-action signal with { "kind": "ready" | "question" | "blocked", "text": "..." }; text max 96 chars.
 
 Stage values:
 - reading: gathering context, inspecting files/docs/logs, planning
@@ -320,9 +325,14 @@ Rules:
 - Status should extend stage with narrow verified agent progress, not user requests or mechanics.
 - Do not convert an unchecked todo into status; it can only be nextStep.
 - Use a checked todo as status only when recent activity supports that the main agent just completed/verified it.
-- For nextStep, prioritize the latest explicit user request, stated plan, unchecked todo, or handoff need.
-- Derive nextStep only from explicit evidence: an unchecked todo, stated plan, user request, or final handoff need. Do not speculate.
-- If final answer leaves a decision, commit, validation, or unavailable external tool, use waiting/blocked and nextStep "Needs …".
+- For nextStep, prioritize the latest explicit user request, stated plan, unchecked todo, or handoff action.
+- Derive nextStep only from explicit evidence: an unchecked todo, stated plan, user request, or final handoff action. Do not speculate.
+- Phrase nextStep as a direct action such as "Run /reflect", "Approve title source", or "Restore API access". Put passive state such as "Awaiting reflection handoff" in status or attention, not nextStep.
+- Emit attention only from explicit final evidence when human action is now useful. Omit it during active work or uncertainty.
+- ready requires an explicit completed/reviewable handoff and stage complete.
+- question requires an explicit answer, choice, or approval and stage waiting.
+- blocked requires an explicit inability to proceed and stage blocked.
+- attention.text states the exact handoff, question, or blocker; it is not general activity status.
 
 Examples:
 - Good goal: "metadata-001: Hub metadata v2"
@@ -332,7 +342,12 @@ Examples:
 - Good nextStep: "Commit remaining hardening diffs"
 - Bad nextStep: "Commit and push remaining wf/social hardening diffs".
 
-Return JSON only with keys: goal, status, nextStep, stage, confidence.`;
+Return JSON only with keys: goal, status, nextStep, stage, confidence, attention.`;
+
+function withoutAttention(metadata: ParsedSessionMetadata): ParsedSessionMetadata {
+  const { attention: _attention, ...rest } = metadata;
+  return rest;
+}
 
 function extractContentText(content: unknown): string {
   if (typeof content === "string") return content;

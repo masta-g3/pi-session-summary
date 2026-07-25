@@ -39,6 +39,38 @@ test("normalizes invalid stage and confidence", () => {
   });
 });
 
+test("parses stage-compatible explicit attention", () => {
+  for (const [kind, stage] of [["ready", "complete"], ["question", "waiting"], ["blocked", "blocked"]] as const) {
+    assert.deepEqual(parseSessionMetadataJson(JSON.stringify({
+      goal: "Ship attention metadata",
+      status: "Final handoff published",
+      stage,
+      confidence: 0.9,
+      attention: { kind, text: "Needs a human response" },
+    }))?.attention, { kind, text: "Needs a human response" });
+  }
+});
+
+test("omits invalid or uncertain attention without dropping semantic metadata", () => {
+  const invalid = [
+    { kind: "ready", text: "Mismatched", stage: "waiting", confidence: 0.9 },
+    { kind: "review", text: "Unknown", stage: "complete", confidence: 0.9 },
+    { kind: "ready", text: "   ", stage: "complete", confidence: 0.9 },
+    { kind: "ready", text: "Uncertain", stage: "complete", confidence: 0.49 },
+  ];
+  for (const candidate of invalid) {
+    const parsed = parseSessionMetadataJson(JSON.stringify({
+      goal: "Ship attention metadata",
+      status: "Semantic metadata remains",
+      stage: candidate.stage,
+      confidence: candidate.confidence,
+      attention: { kind: candidate.kind, text: candidate.text },
+    }));
+    assert.equal(parsed?.status, "Semantic metadata remains");
+    assert.equal(parsed?.attention, undefined);
+  }
+});
+
 test("sanitizes and truncates metadata fields independently", () => {
   const long = "x".repeat(220);
   const parsed = parseSessionMetadataJson(JSON.stringify({
@@ -49,7 +81,16 @@ test("sanitizes and truncates metadata fields independently", () => {
   }));
   assert.equal(parsed?.goal.length, 96);
   assert.equal(parsed?.status.length, 60);
-  assert.equal(parsed?.nextStep?.length, 60);
+  assert.equal(parsed?.nextStep?.length, 48);
+  const attention = parseSessionMetadataJson(JSON.stringify({
+    goal: "Bound attention",
+    status: "Checking bounds",
+    stage: "blocked",
+    confidence: 1,
+    attention: { kind: "blocked", text: long },
+  }))?.attention;
+  assert.equal(attention?.text.length, 96);
+  assert.equal(attention?.text.endsWith("…"), true);
   assert.equal(parsed?.goal.endsWith("…"), true);
   assert.equal(parsed?.status.endsWith("…"), true);
   assert.equal(parsed?.nextStep?.endsWith("…"), true);

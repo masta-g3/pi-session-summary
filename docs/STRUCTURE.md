@@ -54,6 +54,7 @@ flowchart TD
   Snapshot --> Plan[Full local plan]
   Compact --> Scheduler
   Compact --> Widget[In-session plan/status widget]
+  Compact --> Publish
   Plan --> Drawer[Focused todo drawer]
   Scheduler --> Model[Fast metadata model]
   Model --> Publish[Sanitize and publish]
@@ -118,15 +119,15 @@ src/
 1. Pi emits lifecycle/activity events.
 2. `index.ts` normalizes events into compact facts and stores them in the activity buffer.
 3. When workflow intent or an explicit ticket id is present, `workflow.ts` reads repo-local `agent-work/` files once and derives a `WorkflowSnapshot` containing compact context plus an optional full local plan.
-4. `index.ts` sends only the compact projection to the summarizer and compact widget. An explicit todo toggle performs a separately guarded fresh read and passes only the full plan projection to `todo-panel.ts`.
+4. `index.ts` sends only the compact projection to the summarizer and compact widget, and maps it to optional deterministic Hub plan metadata through the existing serialized writer. An explicit todo toggle performs a separately guarded fresh read and passes only the full plan projection to `todo-panel.ts`.
 5. The summarizer schedules work with debounce/rate-limit guards.
 6. At most one model request is in flight.
-7. The model returns JSON with `goal`, `status`, `nextStep`, `stage`, and `confidence`.
-8. Text helpers sanitize and validate the response.
+7. The model returns JSON with `goal`, `status`, `nextStep`, `stage`, `confidence`, and optional explicit `attention` when a model is available; plan metadata does not require one.
+8. Text helpers sanitize the response, enforce attention confidence/stage compatibility, and strip attention from requests launched while the agent was running.
 9. The widget displays repo-derived phase progress when available; otherwise it displays semantic status and an evidenced next step.
-10. If Agent Hub env vars exist, latest-only JSON is atomically written for the session.
-11. If `PI_SESSION_SUMMARY_METADATA_HISTORY=1` and Hub env vars exist, the successful derivation is appended to debug JSONL history.
-12. If the session is unnamed, workflow tickets get a deterministic `ticket-id: abbreviated objective` name; otherwise the first user prompt can generate a short session name with the same model path.
+10. If Agent Hub env vars exist, latest-only semantic, attention, and optional plan JSON is atomically written for the session. `before_agent_start` clears attention from both in-memory copies and queues the cleared file before later refreshes; a guarded workflow refresh updates or removes the nested plan projection without another parse.
+11. If `PI_SESSION_SUMMARY_METADATA_HISTORY=1` and Hub env vars exist, the successful model derivation is appended to debug JSONL history; deterministic plan updates are not logged there.
+12. If the session is unnamed, explicitly identified workflow tickets get a deterministic tracked title; inferred single-in-progress context cannot rename a session, so other sessions use the first user prompt and model path.
 
 ## Semantic Outputs vs Activity Inputs
 
@@ -134,11 +135,12 @@ Product-level metadata:
 
 | Element | Runtime representation | Notes |
 | --- | --- | --- |
-| Session name | Pi/Hub native session name | Deterministic `ticket-id: abbreviated objective` for workflow tickets, otherwise generated from the first prompt or `/session-summary name`; not written to Hub metadata. |
+| Session name | Pi/Hub native session name | Deterministic tracked title for explicitly identified workflow tickets; otherwise generated from the first prompt or `/session-summary name`; not written to Hub metadata. |
 | Goal | `goal` | Stable user-facing session or ticket objective. |
 | Status | `status` | Concise latest verified progress achieved by the main agent in context of the goal; shown in-session when phased plan progress is unavailable. |
 | Next step | `nextStep` | Short explicit planned action or need toward the goal, when evidenced; shown with semantic status when available. |
 | Stage | `stage` | Current mode: `reading`, `editing`, `testing`, `waiting`, `blocked`, or `complete`. |
+| Attention | `attention` | Explicit final `ready`, `question`, or `blocked` claim with the exact human-facing handoff, ask, or blocker. |
 
 Activity facts are different: they are compact internal inputs captured from Pi events (`user`, `assistant`, `tool`, `result`, `final`, `error`) so the model can infer the semantic outputs. Activity facts stay bounded in memory and must not be written to structured output.
 
@@ -168,7 +170,7 @@ Workflow context is an optional grounding source, not a dependency. A ticket can
 
 The reader returns a `WorkflowSnapshot` with two deliberately separate projections:
 
-- `WorkflowContext` contains only ticket id, description, latest checked todo, next unchecked todo, and current progress for Markdown headings shaped like `Phase <number>: <title>` or `Stage <number>: <title>`. This compact projection is the only workflow data available to the summary model, naming, and compact widget.
+- `WorkflowContext` contains only ticket id, description, latest checked todo, next unchecked todo, and current progress for Markdown headings shaped like `Phase <number>: <title>` or `Stage <number>: <title>`. This compact projection is the only workflow data available to the summary model, naming, compact widget, and generic Hub plan-summary mapping.
 - `WorkflowPlan` contains sanitized section headings and every executable task for the local drawer. When populated numbered phases/stages exist, it excludes checkboxes outside those sections and preserves source kind/number labels such as `Stage 3`. Otherwise, one untitled section contains all flat checklist items.
 
 The parser selects the first incomplete phase for compact progress, or the final phase when all are complete. Flat checklists remain compact next-step context but do not produce phase progress. Checked todos are context for the model, not automatic semantic `status`; recent activity must support that milestone. Missing, ambiguous, or absent workflow files produce no plan context.
@@ -184,7 +186,7 @@ Session naming is intentionally smaller than `pi-session-auto-rename`:
 - reuse the summary model/auth resolution
 - no separate model picker, config file, or naming preferences
 
-Generated names are sanitized to one 2–6 word-ish title line and capped at 80 characters.
+Generated names are sanitized to one 2–6 word-ish title line and capped at 80 characters. Deterministic workflow naming requires `explicit-ticket` evidence from the prompt or `set_workflow_ticket`; `single-in-progress` inference remains available for metadata and plan progress but cannot rename the session.
 
 ### Session Metadata
 
@@ -204,14 +206,20 @@ interface ParsedSessionMetadata {
   stage: SummaryStage;
   nextStep?: string;
   confidence?: number;
+  attention?: {
+    kind: "ready" | "question" | "blocked";
+    text: string;
+  };
 }
 ```
 
-`goal` should remain stable across workflow steps unless the user clearly changes tasks and should describe the stable session/feature/request outcome. When a ticket concept exists, include its identifier/name, for example `metadata-002: Workflow-grounded session metadata and titles`. `status` should be a terse backward-looking dashboard fragment describing latest verified progress by the main agent, not broad conclusions or read/parse mechanics. `nextStep` should be forward-looking, short, distinct from `status`, and omitted when there is no explicit evidence. Evidence can be an unchecked plan item, a stated main-agent plan, a user request, or a final handoff need. Attention needs should appear through `stage` plus `nextStep` (for example, `Needs API credentials`). Parser caps are `goal` 96 chars, `status` 60 chars, and `nextStep` 60 chars.
+`goal` should remain stable across workflow steps unless the user clearly changes tasks and should describe the stable session/feature/request outcome. When a ticket concept exists, include its identifier/name, for example `metadata-002: Workflow-grounded session metadata and titles`. `status` should be a terse backward-looking dashboard fragment describing latest verified progress by the main agent, not broad conclusions or read/parse mechanics. `nextStep` should be forward-looking, short, distinct from `status`, and omitted when there is no explicit evidence. Evidence can be an unchecked plan item, a stated main-agent plan, a user request, or a final handoff need.
+
+Attention is stricter than stage: ordinary `waiting` is not a question, and `complete` alone is not a reviewable handoff. Emit only explicit `ready/complete`, `question/waiting`, or `blocked/blocked` claims with confidence at least `0.5`; uncertain or continuing work omits the object. The scheduler snapshots agent state when each request starts, strips attention from running requests before publishing either metadata copy, and clears preserved attention synchronously at the next `before_agent_start`. Parser caps are `goal` 96 chars, `status` 60 chars, `nextStep` 60 chars, and attention text 96 chars.
 
 ### Agent Hub Metadata File
 
-When `PI_AGENT_HUB_DIR` and `PI_AGENT_HUB_SESSION_ID` are set, the extension writes Hub's generic metadata contract:
+When `PI_AGENT_HUB_DIR` and `PI_AGENT_HUB_SESSION_ID` are set, the extension writes Hub's generic metadata contract. The deterministic optional plan projection is built from the already-cached `WorkflowContext`, so it is available without a model and never causes a second plan parse:
 
 ```text
 ${PI_AGENT_HUB_DIR}/session-metadata/${PI_AGENT_HUB_SESSION_ID}.json
@@ -220,6 +228,13 @@ ${PI_AGENT_HUB_DIR}/session-metadata/${PI_AGENT_HUB_SESSION_ID}.json
 Schema:
 
 ```ts
+interface SessionPlanSummary {
+  feature?: string;
+  phase?: { title: string; index: number; count: number };
+  tasks?: { completed: number; total: number };
+  nextStep?: string;
+}
+
 interface HubSessionMetadataFile {
   source?: "pi-session-summary";
   goal?: string;
@@ -227,11 +242,18 @@ interface HubSessionMetadataFile {
   stage?: SummaryStage;
   nextStep?: string;
   confidence?: number;
+  attention?: {
+    kind: "ready" | "question" | "blocked";
+    text: string;
+  };
   updatedAt?: number;
+  plan?: SessionPlanSummary;
 }
 ```
 
-Hub displays metadata when at least one of `goal`, `status`, `nextStep`, or `stage` exists and `confidence` is missing or at least `0.5`. Hub ignores package-specific fields such as `version`, `sessionName`, `model`, and `generatedAt`, so the producer does not write them. `stage` is semantic workflow classification; process liveness belongs to Hub, not this file. Raw prompts, tool arguments, command output, and conversation snippets do not.
+The plan projection contains only feature description, current phase identity, current-phase task counts, and next unchecked task when present. Flat checklists can publish only feature and next-step fields. Workflow refreshes publish plan changes through the same serialized atomic chain and omit `plan` when resolution leaves no mapped fields, clearing stale state. The complete checklist remains local to the on-demand drawer and is never available to the model or Hub metadata.
+
+Hub confidence-gates model-derived semantic fields and validates attention agreement, while valid deterministic `plan` data remains displayable without a model or sufficient semantic confidence. Hub currently projects attention only in its `v` workflow board for Active sessions eligible for the canonical producer pipeline; groups view and sessions without valid workflow metadata do not show the attention reason. Hub ignores package-specific fields such as `version`, `sessionName`, `model`, and `generatedAt`, so the producer does not write them. `stage` is semantic activity, attention is an explicit human-action claim, and process liveness belongs to Hub. Completion evidence, usage telemetry, raw prompts, tool arguments, command output, full checklists, and conversation snippets do not leave the session through this file.
 
 ### Debug Metadata History File
 
@@ -241,11 +263,11 @@ When `PI_SESSION_SUMMARY_METADATA_HISTORY=1`, `PI_AGENT_HUB_DIR`, and `PI_AGENT_
 ${PI_AGENT_HUB_DIR}/session-metadata-history/${PI_AGENT_HUB_SESSION_ID}.jsonl
 ```
 
-Each JSONL entry includes `source`, raw Hub `sessionId`, `generatedAt`, `activitySequence`, optional `userTurn`, `model`, and a nested `metadata` object containing only sanitized derived `goal`, `status`, `stage`, optional `nextStep`, and optional `confidence`. The filename uses the same sanitized session-id behavior as latest metadata output; the `sessionId` field remains raw for correlation with Hub logs. Clear/no-model/shutdown/name-only updates are not logged.
+Each JSONL entry includes `source`, raw Hub `sessionId`, `generatedAt`, `activitySequence`, optional `userTurn`, `model`, and a nested `metadata` object containing only sanitized derived `goal`, `status`, `stage`, optional `nextStep`, optional `confidence`, and optional accepted `attention`. The filename uses the same sanitized session-id behavior as latest metadata output; the `sessionId` field remains raw for correlation with Hub logs. Clear/no-model/shutdown/name-only updates are not logged.
 
 `userTurn` increments on each `before_agent_start` and groups multiple metadata updates caused by one user request. Entries without `userTurn` are grouped as `unknown` by the quality tool.
 
-`src/metadata-quality.ts` can parse this JSONL, group entries by turn, score final entries more strictly than transient updates, and report issues by category. Use it for debugging prompt/metadata quality, not as a CI gate for real model behavior.
+`src/metadata-quality.ts` can parse this JSONL, group entries by turn, score final entries more strictly than transient updates, validate attention shape/confidence/stage agreement, and report issues by category. Use it for debugging prompt/metadata quality, not as a CI gate for real model behavior.
 
 ## Key Patterns
 
@@ -270,7 +292,7 @@ activity -> schedule timer -> model call in flight
             +--- follow-up if needed
 ```
 
-Each new user turn resets the bounded activity buffer, but keeps the latest metadata for prompt continuity. Clear metadata only on session-level resets, disable, or shutdown so `goal` stays stable across turns.
+Each new user turn resets the bounded activity buffer and keeps stable narrative metadata for prompt continuity, but removes attention from both the summarizer continuity copy and extension runtime copy before atomically rewriting latest state. Clear all metadata only on session-level resets, disable, or shutdown so `goal` stays stable across turns.
 
 ### Best-effort model calls
 

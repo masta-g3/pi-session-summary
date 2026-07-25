@@ -2,7 +2,7 @@ import { complete, type UserMessage } from "@earendil-works/pi-ai";
 import type { SummaryModelAuth } from "./models.js";
 import { sanitizeText } from "./text.js";
 
-export const MAX_SESSION_NAME_LENGTH = 80;
+export const MAX_SESSION_NAME_LENGTH = 48;
 const NAME_MAX_TOKENS = 64;
 const NAME_TIMEOUT_MS = 2_500;
 
@@ -15,7 +15,7 @@ export type SessionEntry = {
   };
 };
 
-export const NAMING_SYSTEM_PROMPT = "You create short, descriptive Pi coding-agent session names. Use 2-6 words in Title Case. Respond with only the name, no quotes or punctuation.";
+export const NAMING_SYSTEM_PROMPT = "You create plain, concrete Pi coding-agent session names. Use 2-5 words in Title Case with no ticket prefix or invented abbreviation. Respond with only the name, no quotes or punctuation.";
 
 export function extractTextFromContent(content: MessageContent): string {
   if (typeof content === "string") return content;

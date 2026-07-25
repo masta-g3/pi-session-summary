@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 import type { SessionMetadataLogEntry } from "./metadata-log.js";
 import { SUMMARY_STAGES, type SummaryStage } from "./text.js";
 
-export type MetadataQualityField = "goal" | "status" | "nextStep" | "stage" | "privacy" | "turn";
+export type MetadataQualityField = "goal" | "status" | "nextStep" | "stage" | "attention" | "privacy" | "turn";
 
 export interface MetadataQualityCategory {
   id: string;
@@ -56,6 +56,7 @@ export function defaultMetadataQualityCategories(): MetadataQualityCategory[] {
     { id: "status", field: "status" },
     { id: "nextStep", field: "nextStep" },
     { id: "stage", field: "stage" },
+    { id: "attention", field: "attention" },
     { id: "privacy", field: "privacy" },
     { id: "turn", field: "turn" },
   ];
@@ -201,6 +202,13 @@ function shapeIssues(
   if (!entry.metadata?.goal) add("goal", "goal is missing");
   if (!entry.metadata?.status) add("status", "status is missing");
   if (!isStage(entry.metadata?.stage)) add("stage", "stage is invalid");
+  const attention = entry.metadata?.attention;
+  if (attention) {
+    const expectedStage = attention.kind === "ready" ? "complete" : attention.kind === "question" ? "waiting" : attention.kind === "blocked" ? "blocked" : undefined;
+    if (!expectedStage || !attention.text?.trim()) add("attention", "attention is invalid");
+    else if (entry.metadata.stage !== expectedStage) add("attention", `attention kind ${attention.kind} does not match stage ${entry.metadata.stage}`);
+    if (typeof entry.metadata.confidence !== "number" || entry.metadata.confidence < 0.5) add("attention", "attention requires confidence >= 0.5");
+  }
 
   return issues;
 }
@@ -211,7 +219,7 @@ function privacyIssues(
   categoryFor: (field: MetadataQualityField) => string,
 ): MetadataQualityIssue[] {
   const serialized = JSON.stringify(entry);
-  const metadataTexts = [entry.metadata?.goal, entry.metadata?.status, entry.metadata?.nextStep]
+  const metadataTexts = [entry.metadata?.goal, entry.metadata?.status, entry.metadata?.nextStep, entry.metadata?.attention?.text]
     .filter((value): value is string => typeof value === "string");
   return PRIVACY_MARKERS
     .filter((marker) => serialized.includes(marker) || metadataTexts.some((text) => text.includes(marker)))

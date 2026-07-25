@@ -1,9 +1,15 @@
+export interface SessionAttention {
+  kind: "ready" | "question" | "blocked";
+  text: string;
+}
+
 export interface ParsedSessionMetadata {
   goal: string;
   status: string;
   stage: SummaryStage;
   nextStep?: string;
   confidence?: number;
+  attention?: SessionAttention;
 }
 
 export type SummaryStage =
@@ -29,7 +35,13 @@ const CONTROL_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u009b]/g;
 const ANSI_PATTERN = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\)|[PX^_].*?\u001b\\|[@-Z\\-_])/g;
 const MAX_GOAL_CHARS = 96;
 const MAX_STATUS_CHARS = 60;
-const MAX_NEXT_STEP_CHARS = 60;
+const MAX_NEXT_STEP_CHARS = 48;
+const MAX_ATTENTION_CHARS = 96;
+const ATTENTION_STAGE = {
+  ready: "complete",
+  question: "waiting",
+  blocked: "blocked",
+} as const satisfies Record<SessionAttention["kind"], SummaryStage>;
 
 export function sanitizeText(text: string, maxChars = 800): string {
   const stripped = text
@@ -77,8 +89,26 @@ export function parseSessionMetadataJson(text: string): ParsedSessionMetadata | 
   const confidence = typeof record.confidence === "number" && Number.isFinite(record.confidence)
     ? Math.max(0, Math.min(1, record.confidence))
     : undefined;
+  const attention = parseAttention(record.attention, stage, confidence);
 
-  return { goal, status, stage, ...(nextStep ? { nextStep } : {}), ...(confidence !== undefined ? { confidence } : {}) };
+  return {
+    goal,
+    status,
+    stage,
+    ...(nextStep ? { nextStep } : {}),
+    ...(confidence !== undefined ? { confidence } : {}),
+    ...(attention ? { attention } : {}),
+  };
+}
+
+function parseAttention(value: unknown, stage: SummaryStage, confidence: number | undefined): SessionAttention | undefined {
+  if (confidence === undefined || confidence < 0.5 || !value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const kind = record.kind;
+  if (kind !== "ready" && kind !== "question" && kind !== "blocked") return undefined;
+  if (ATTENTION_STAGE[kind] !== stage || typeof record.text !== "string") return undefined;
+  const text = sanitizeText(record.text, MAX_ATTENTION_CHARS);
+  return text ? { kind, text } : undefined;
 }
 
 function extractJsonObject(text: string): string | undefined {
