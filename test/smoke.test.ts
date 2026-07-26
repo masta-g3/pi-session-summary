@@ -274,6 +274,7 @@ test("auto-names unnamed workflow sessions with deterministic ticket title", asy
   await writeFile(join(dir, "agent-work", "features.yaml"), `
 - id: metadata-002
   status: in_progress
+  title: "Compact metadata titles"
   description: "Workflow-grounded session metadata and titles for dashboard supervision"
   plan_file: agent-work/plans/metadata-002.md
 `, "utf8");
@@ -300,8 +301,10 @@ test("auto-names unnamed workflow sessions with deterministic ticket title", asy
 
     events.get("session_start")?.({}, ctx as never);
     events.get("before_agent_start")?.({ prompt: "execute metadata-002" }, ctx as never);
-    for (let attempt = 0; attempt < 20 && !name; attempt++) await new Promise((resolve) => setTimeout(resolve, 5));
-    assert.equal(name, "metadata-002: Workflow-grounded metadata");
+    for (let attempt = 0; attempt < 20 && (!name || !notifications.some((item) => item.includes("Session named:"))); attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(name, "Compact metadata titles");
     assert.ok(notifications.some((item) => item.includes("Session named:")));
   } finally {
     await events.get("session_shutdown")?.({}, ctx as never);
@@ -452,6 +455,16 @@ test("publishes, refreshes, and clears deterministic plan metadata without a mod
       nextStep: "Refresh after checklist edits",
     });
     assert.equal("goal" in parsed, false);
+
+    events.get("before_agent_start")?.({ prompt: "why do progress labels disappear while this agent runs?" }, ctx as never);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    parsed = JSON.parse(await readFile(statePath, "utf8")) as Record<string, unknown>;
+    assert.deepEqual(parsed.plan, {
+      feature: "Rich workflow board",
+      phase: { title: "Publish plan metadata", index: 2, count: 2 },
+      tasks: { completed: 1, total: 3 },
+      nextStep: "Refresh after checklist edits",
+    });
 
     await writeFile(planPath, `
 ### Phase 1: Parse the plan

@@ -244,7 +244,7 @@ async function readPlanChecklist(cwd: string, planFile: string): Promise<PlanChe
       if (phaseHeading) {
         activePhase = { headingLevel: heading[1]?.length ?? 1, ...phaseHeading, items: [] };
         phases.push(activePhase);
-      } else if (activePhase && (heading[1]?.length ?? 1) <= activePhase.headingLevel) {
+      } else if (activePhase && (heading[1]?.length ?? 1) < activePhase.headingLevel) {
         activePhase = undefined;
       }
       continue;

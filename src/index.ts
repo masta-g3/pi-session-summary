@@ -123,8 +123,8 @@ export default function sessionSummary(pi: ExtensionAPI) {
     const promptText = compactUnknown(prompt, 1_500);
     const promptTicketId = extractTicketId(promptText);
     const promptWorkflowIntent = hasWorkflowIntent(promptText);
-    state.latestTicketId = promptTicketId ?? (promptWorkflowIntent ? state.latestTicketId : undefined);
-    state.latestWorkflowIntent = Boolean(promptTicketId) || promptWorkflowIntent;
+    state.latestTicketId = promptTicketId ?? state.latestTicketId;
+    state.latestWorkflowIntent = Boolean(state.latestTicketId) || promptWorkflowIntent;
     state.activity.record("user", prompt);
     clearSessionSummaryWidget(ctx);
     void refreshPlanWidget(ctx, state, false);

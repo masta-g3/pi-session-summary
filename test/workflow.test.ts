@@ -163,7 +163,9 @@ test("returns every executable phased task in a structured snapshot", async () =
 - [ ] Do not include background reading
 
 ### Phase 1: Define the contract
+### Tests first
 - [x] Confirm fields
+### Smallest passing change
 - [x] Document limits
 
 ### Phase 2: Empty section
