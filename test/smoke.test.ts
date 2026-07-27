@@ -447,11 +447,12 @@ test("publishes, refreshes, and clears deterministic plan metadata without a mod
     await events.get("session_start")?.({}, ctx as never);
     events.get("before_agent_start")?.({ prompt: "execute workflow-board-001" }, ctx as never);
     const statePath = join(dir, "session-metadata", "plan-metadata.json");
-    let parsed = await readJsonUntil(statePath, (value) => (value.plan as { tasks?: { completed?: number } } | undefined)?.tasks?.completed === 1);
+    let parsed = await readJsonUntil(statePath, (value) => (value.plan as { tasks?: { completed?: number } } | undefined)?.tasks?.completed === 2);
     assert.deepEqual(parsed.plan, {
       feature: "Rich workflow board",
       phase: { title: "Publish plan metadata", index: 2, count: 2 },
-      tasks: { completed: 1, total: 3 },
+      tasks: { completed: 2, total: 4 },
+      phases: [{ completed: 1, total: 1 }, { completed: 1, total: 3 }],
       nextStep: "Refresh after checklist edits",
     });
     assert.equal("goal" in parsed, false);
@@ -462,13 +463,35 @@ test("publishes, refreshes, and clears deterministic plan metadata without a mod
     assert.deepEqual(parsed.plan, {
       feature: "Rich workflow board",
       phase: { title: "Publish plan metadata", index: 2, count: 2 },
-      tasks: { completed: 1, total: 3 },
+      tasks: { completed: 2, total: 4 },
+      phases: [{ completed: 1, total: 1 }, { completed: 1, total: 3 }],
       nextStep: "Refresh after checklist edits",
     });
 
     await writeFile(planPath, `
 ### Phase 1: Parse the plan
 - [x] Read the workflow snapshot
+- [x] Record the phase snapshot
+
+### Phase 2: Publish plan metadata
+- [x] Add producer types
+- [ ] Refresh after checklist edits
+- [ ] Verify clearing behavior
+`, "utf8");
+    events.get("tool_execution_end")?.({ name: "edit", result: "updated an earlier phase" }, ctx as never);
+    parsed = await readJsonUntil(statePath, (value) => (value.plan as { phases?: Array<{ completed?: number }> } | undefined)?.phases?.[0]?.completed === 2);
+    assert.deepEqual(parsed.plan, {
+      feature: "Rich workflow board",
+      phase: { title: "Publish plan metadata", index: 2, count: 2 },
+      tasks: { completed: 3, total: 5 },
+      phases: [{ completed: 2, total: 2 }, { completed: 1, total: 3 }],
+      nextStep: "Refresh after checklist edits",
+    });
+
+    await writeFile(planPath, `
+### Phase 1: Parse the plan
+- [x] Read the workflow snapshot
+- [x] Record the phase snapshot
 
 ### Phase 2: Publish plan metadata
 - [x] Add producer types
@@ -476,11 +499,12 @@ test("publishes, refreshes, and clears deterministic plan metadata without a mod
 - [ ] Verify clearing behavior
 `, "utf8");
     events.get("tool_execution_end")?.({ name: "edit", result: "updated checklist" }, ctx as never);
-    parsed = await readJsonUntil(statePath, (value) => (value.plan as { tasks?: { completed?: number } } | undefined)?.tasks?.completed === 2);
+    parsed = await readJsonUntil(statePath, (value) => (value.plan as { phases?: Array<{ completed?: number }> } | undefined)?.phases?.[1]?.completed === 2);
     assert.deepEqual(parsed.plan, {
       feature: "Rich workflow board",
       phase: { title: "Publish plan metadata", index: 2, count: 2 },
-      tasks: { completed: 2, total: 3 },
+      tasks: { completed: 4, total: 5 },
+      phases: [{ completed: 2, total: 2 }, { completed: 2, total: 3 }],
       nextStep: "Verify clearing behavior",
     });
 
@@ -489,6 +513,8 @@ test("publishes, refreshes, and clears deterministic plan metadata without a mod
     parsed = await readJsonUntil(statePath, (value) => (value.plan as { nextStep?: string } | undefined)?.nextStep === "Verify flat checklist output");
     assert.deepEqual(parsed.plan, {
       feature: "Rich workflow board",
+      tasks: { completed: 1, total: 2 },
+      phases: [{ completed: 1, total: 2 }],
       nextStep: "Verify flat checklist output",
     });
 

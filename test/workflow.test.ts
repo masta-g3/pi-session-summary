@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { extractTicketId, formatWorkflowContext, hasWorkflowIntent, readWorkflowContext, readWorkflowSnapshot, sessionPlanSummary, workflowSessionName } from "../src/workflow.js";
+import { extractTicketId, formatWorkflowContext, hasWorkflowIntent, readWorkflowContext, readWorkflowSnapshot, sessionPlanSummary, workflowSessionName, type WorkflowPlan } from "../src/workflow.js";
 
 test("maps only compact deterministic workflow context to plan metadata", () => {
   assert.deepEqual(sessionPlanSummary({
@@ -35,6 +35,52 @@ test("maps only compact deterministic workflow context to plan metadata", () => 
   });
   assert.equal(sessionPlanSummary({ ticketId: "workflow-board-001" }), undefined);
   assert.equal(sessionPlanSummary(undefined), undefined);
+});
+
+test("emits whole-plan totals and capped per-phase progress when a plan is available", () => {
+  const plan: WorkflowPlan = {
+    sections: [
+      { heading: "Phase 1 · First", tasks: [{ done: true, text: "one" }, { done: false, text: "two" }] },
+      { heading: "Phase 2 · Second", tasks: [{ done: true, text: "three" }] },
+      ...Array.from({ length: 11 }, (_, index) => ({ tasks: [{ done: index % 2 === 0, text: `task-${index}` }] })),
+    ],
+    completed: 8,
+    total: 14,
+    currentSectionIndex: 1,
+  };
+  const summary = sessionPlanSummary({
+    title: "Phased feature",
+    nextOpenTodo: "two",
+    planProgress: { phaseIndex: 2, phaseCount: 13, title: "Second", completed: 1, total: 1 },
+  }, plan);
+
+  assert.deepEqual(summary, {
+    feature: "Phased feature",
+    phase: { title: "Second", index: 2, count: 13 },
+    tasks: { completed: 8, total: 14 },
+    phases: [
+      { completed: 1, total: 2 },
+      { completed: 1, total: 1 },
+      ...Array.from({ length: 10 }, (_, index) => ({ completed: index % 2 === 0 ? 1 : 0, total: 1 })),
+    ],
+    nextStep: "two",
+  });
+});
+
+test("emits one phase for a flat checklist and no phase data without a checklist", () => {
+  const context = { title: "Flat feature", nextOpenTodo: "Run checks" };
+  assert.deepEqual(sessionPlanSummary(context, {
+    sections: [{ tasks: [{ done: false, text: "Run checks" }] }],
+    completed: 0,
+    total: 1,
+    currentSectionIndex: 0,
+  }), {
+    feature: "Flat feature",
+    tasks: { completed: 0, total: 1 },
+    phases: [{ completed: 0, total: 1 }],
+    nextStep: "Run checks",
+  });
+  assert.deepEqual(sessionPlanSummary(context), { feature: "Flat feature", nextStep: "Run checks" });
 });
 
 test("extracts ticket ids from prompt text", () => {
@@ -466,7 +512,8 @@ test("formats session names only for explicit workflow tickets", () => {
     evidence: "single-in-progress",
   }), undefined);
   assert.equal(workflowSessionName({ description: "No ticket" }), undefined);
-  assert.ok((workflowSessionName({ ticketId: "metadata-002", description: "x".repeat(200), evidence: "explicit-ticket" })?.length ?? 0) <= 80);
+  assert.ok((workflowSessionName({ ticketId: "metadata-002", description: "x".repeat(200), evidence: "explicit-ticket" })?.length ?? 0) <= 48);
+  assert.ok((workflowSessionName({ ticketId: "metadata-002", title: "A very long workflow title that should remain compact in the dashboard footer", evidence: "explicit-ticket" })?.length ?? 0) <= 48);
 });
 
 async function workflowRepo(features: string, plan: string): Promise<string> {

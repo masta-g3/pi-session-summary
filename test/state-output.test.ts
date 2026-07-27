@@ -29,6 +29,7 @@ test("creates parent directory and writes generic Hub metadata JSON", async () =
       feature: "Replace stages with a responsive workflow board.",
       phase: { title: "Publish plan metadata", index: 2, count: 4 },
       tasks: { completed: 2, total: 5 },
+      phases: [{ completed: 1, total: 2 }, { completed: 1, total: 3 }],
       nextStep: "Refresh after checklist edits",
     },
   }, path);
@@ -40,6 +41,7 @@ test("creates parent directory and writes generic Hub metadata JSON", async () =
     feature: "Replace stages with a responsive workflow board.",
     phase: { title: "Publish plan metadata", index: 2, count: 4 },
     tasks: { completed: 2, total: 5 },
+    phases: [{ completed: 1, total: 2 }, { completed: 1, total: 3 }],
     nextStep: "Refresh after checklist edits",
   });
   assert.equal("version" in parsed, false);

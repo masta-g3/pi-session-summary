@@ -366,12 +366,12 @@ async function refreshWorkflowContext(
     workflowIntent: state.latestWorkflowIntent,
   });
   if (!state.sessionActive || request !== state.workflowContextRequest) return undefined;
-  const previousPlan = sessionPlanSummary(state.latestWorkflowContext);
+  const previousPlan = sessionPlanSummary(state.latestWorkflowContext, state.latestWorkflowPlan);
   const context = snapshot?.context;
   if (context?.evidence === "explicit-ticket") state.latestTicketId = context.ticketId;
   state.latestWorkflowContext = context;
   state.latestWorkflowPlan = snapshot?.plan;
-  const nextPlan = sessionPlanSummary(context);
+  const nextPlan = sessionPlanSummary(context, state.latestWorkflowPlan);
   if (JSON.stringify(previousPlan) !== JSON.stringify(nextPlan)) await publishMetadata(ctx, state);
   if (context?.planProgress || options.semanticFallback) showLatestWidget(ctx, state);
   return context;
@@ -495,7 +495,7 @@ async function generateAndSetName(
 async function publishMetadata(_ctx: ExtensionContext, state: RuntimeState, partial: HubMetadataUpdate = {}): Promise<void> {
   state.sequence += 1;
   const latest = partial.clear ? undefined : state.latestMetadata;
-  const plan = sessionPlanSummary(state.latestWorkflowContext);
+  const plan = sessionPlanSummary(state.latestWorkflowContext, state.latestWorkflowPlan);
   const output: HubSessionMetadataFile = {
     source: "pi-session-summary",
     updatedAt: partial.updatedAt ?? Date.now(),

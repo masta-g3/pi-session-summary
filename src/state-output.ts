@@ -14,6 +14,10 @@ export interface SessionPlanSummary {
     completed: number;
     total: number;
   };
+  phases?: Array<{
+    completed: number;
+    total: number;
+  }>;
   nextStep?: string;
 }
 

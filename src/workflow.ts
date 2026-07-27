@@ -66,7 +66,7 @@ const MAX_DESCRIPTION_CHARS = 120;
 const MAX_TODO_CHARS = 120;
 const MAX_PHASE_TITLE_CHARS = 80;
 const MAX_PLAN_FILE_CHARS = 160;
-const MAX_SESSION_NAME_CHARS = 80;
+const MAX_SESSION_NAME_CHARS = 48;
 const MAX_SESSION_SUFFIX_CHARS = 48;
 const TITLE_SKIP_WORDS = new Set(["a", "an", "and", "dashboard", "dashboards", "for", "of", "session", "sessions", "supervision", "the", "title", "titles", "to"]);
 const UNAVAILABLE_FILE_CODES = new Set(["EACCES", "ENOENT", "ENOTDIR", "EPERM"]);
@@ -109,14 +109,24 @@ export async function readWorkflowContext(request: WorkflowContextRequest): Prom
   return (await readWorkflowSnapshot(request))?.context;
 }
 
-export function sessionPlanSummary(context: WorkflowContext | undefined): SessionPlanSummary | undefined {
+export function sessionPlanSummary(context: WorkflowContext | undefined, workflowPlan?: WorkflowPlan): SessionPlanSummary | undefined {
   if (!context) return undefined;
   const progress = context.planProgress;
   const plan: SessionPlanSummary = {
     ...(context.title ? { feature: context.title } : {}),
     ...(progress ? {
       phase: { title: progress.title, index: progress.phaseIndex, count: progress.phaseCount },
-      tasks: { completed: progress.completed, total: progress.total },
+      tasks: workflowPlan
+        ? { completed: workflowPlan.completed, total: workflowPlan.total }
+        : { completed: progress.completed, total: progress.total },
+    } : workflowPlan ? {
+      tasks: { completed: workflowPlan.completed, total: workflowPlan.total },
+    } : {}),
+    ...(workflowPlan ? {
+      phases: workflowPlan.sections.slice(0, 12).map((section) => ({
+        completed: section.tasks.filter((task) => task.done).length,
+        total: section.tasks.length,
+      })),
     } : {}),
     ...(context.nextOpenTodo ? { nextStep: context.nextOpenTodo } : {}),
   };
