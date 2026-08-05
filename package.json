@@ -1,47 +1,16 @@
 {
   "name": "pi-session-summary",
   "version": "0.1.0",
-  "description": "Semantic session metadata and naming for Pi coding-agent sessions.",
+  "description": "Retired Pi extension. Session context now belongs to Rules, Pi, and Pi Agent Hub.",
+  "private": true,
   "type": "module",
   "license": "MIT",
-  "keywords": [
-    "pi-package",
-    "pi-extension",
-    "session-summary",
-    "session-naming",
-    "llm",
-    "coding-agent"
-  ],
   "files": [
-    "src",
     "README.md",
+    "docs/STRUCTURE.md",
     "LICENSE"
   ],
   "scripts": {
-    "check": "tsc --noEmit",
-    "build:test": "rm -rf .tmp-test && tsc -p tsconfig.test.json",
-    "test": "npm run build:test && node --test .tmp-test/test/*.js",
-    "metadata:quality": "npm run build:test && node .tmp-test/src/metadata-quality.js",
     "pack:dry-run": "npm pack --dry-run"
-  },
-  "pi": {
-    "extensions": [
-      "./src/index.ts"
-    ]
-  },
-  "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*"
-  },
-  "devDependencies": {
-    "@earendil-works/pi-ai": "0.78.0",
-    "@earendil-works/pi-coding-agent": "0.78.0",
-    "@earendil-works/pi-tui": "0.78.0",
-    "@types/node": "24.12.4",
-    "typescript": "5.9.3"
-  },
-  "engines": {
-    "node": ">=22.19.0"
   }
 }

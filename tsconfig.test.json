@@ -1,9 +1,0 @@
-{
-  "extends": "./tsconfig.json",
-  "compilerOptions": {
-    "declaration": false,
-    "sourceMap": false,
-    "outDir": ".tmp-test"
-  },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
-}
